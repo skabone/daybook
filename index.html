@@ -753,9 +753,10 @@
     });
     // 5. sync file needs a permission tap after browser restart
     if(syncReconnect && d.indexOf("sync-reconnect")<0) out.push({id:"sync-reconnect",text:'Your <b>sync file</b> needs a quick permission tap after the browser restarted.',action:"Reconnect",act:"sync"});
-    // 6. backup reminder — data lives only in this browser
+    // 6. backup reminder — only when no sync is safeguarding the data
+    var synced = (GH&&GH.gistId) || syncHandle;
     var stale = S.lastExport ? diffDays(t,S.lastExport)>=30 : S.tasks.length>=15;
-    if(stale){ var bid="backup-"+t.slice(0,7); if(d.indexOf(bid)<0) out.push({id:bid,text:'Your data lives only in this browser. <b>Export a backup</b>'+(S.lastExport?' — the last one was '+diffDays(t,S.lastExport)+' days ago.':' to keep it safe.'),action:"Export",act:"export"}); }
+    if(stale && !synced){ var bid="backup-"+t.slice(0,7); if(d.indexOf(bid)<0) out.push({id:bid,text:'Your work saves in this browser automatically, but only here. Turn on <b>☁️ Cloud sync</b> (⋯ menu) or <b>export a backup</b> so a cleared browser or lost device can\'t take it with it.'+(S.lastExport?' Last backup: '+diffDays(t,S.lastExport)+' days ago.':''),action:"Export",act:"export"}); }
     return out.slice(0,4);
   }
   function doneStreak(){
@@ -1695,7 +1696,7 @@
   document.getElementById("menu-btn").onclick=function(){
     var SKINS=[["paper","Paper"],["ocean","Ocean"],["forest","Forest"],["plum","Blossom"],["ink","Ink"]];
     modal('<h3>Backup &amp; settings</h3>'+
-      '<p class="sub">Your data lives only on this device, in this browser. Back it up or move it to another device here.</p>'+
+      '<p class="sub">Your data saves automatically in this browser and survives closing or restarting. To protect it beyond this device — or carry it to another one — use a backup, sync file, or cloud sync below.</p>'+
       '<div class="fld"><label>Color scheme</label><div class="chips" id="skin-row">'+SKINS.map(function(s){return '<button class="chip" data-s="'+s[0]+'" aria-pressed="'+((S.skin||"paper")===s[0])+'">'+s[1]+'</button>';}).join("")+'</div><div class="sub" style="font-size:11px;margin-top:6px">Combine with the ◐ light/dark toggle in the top bar.</div></div>'+
       '<div class="fld"><label>Your name (for the greeting)</label><input id="set-name" value="'+esc(S.name||"")+'" placeholder="e.g. Sam"/></div>'+
       '<div class="stack">'+
