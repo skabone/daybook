@@ -34,4 +34,12 @@ Download `index.html` and double-click it — that's the whole install. Or fork 
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+**Free for personal & noncommercial use · created by Mintay Misgano · commercial use by permission.**
+
+Daybook is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE):
+
+- ✅ Use it, change it, and share it freely for any **noncommercial** purpose.
+- 🏷️ Keep the credit — every shared copy or derivative must retain the notice
+  `Required Notice: Copyright (c) 2026 Mintay Misgano (https://github.com/skabone)`.
+- 💼 **Commercial use** (selling it, paid products/services built on it, etc.) requires written permission — [open an issue](https://github.com/skabone/daybook/issues) to ask.
+- 💌 Building something on top of it? A heads-up is appreciated.
