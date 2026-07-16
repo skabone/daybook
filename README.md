@@ -35,6 +35,15 @@ Everything is stored in your browser's `localStorage`. The site itself stores no
 2. **Sync file** — auto-save to a local file (Chrome/Edge), handy with a synced drive folder.
 3. **Cloud sync (optional)** — connect a GitHub personal access token (gist scope only) and Daybook auto-saves to a secret gist on *your* account, so you can pick up on any browser or computer. The token never leaves your browser and is never included in exports.
 
+## Install it as an app
+
+Daybook runs fine in a browser tab, but you can also give it its own window and Dock/Home-screen icon:
+
+- **Desktop (Brave / Chrome / Edge):** open the site, then menu → **Install Daybook…** (or the install icon in the address bar). It opens in its own window, works offline, and lives in Launchpad / the Start menu.
+- **iPhone / iPad (Safari):** Share → **Add to Home Screen**.
+- **Android (Chrome):** menu → **Add to Home screen / Install app**.
+- **Native macOS app (no Electron, free):** build a real Swift + WKWebView app — see [`native/`](native/). `cd native && ./build.sh`, then move `Daybook.app` to Applications.
+
 ## Run it yourself
 
 Download `index.html` and double-click it — that's the whole install. Or fork this repo and enable GitHub Pages to host your own copy.

@@ -1,0 +1,5 @@
+Daybook.app/
+*.icns
+*.iconset/
+daybook-bin
+makeicon-bin
