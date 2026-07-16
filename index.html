@@ -434,6 +434,13 @@
   .pal-row.sel{ background:var(--terra-bg); }
   .pal-row .ac-hint{ margin-left:auto; font-size:10.5px; color:var(--ink-faint); }
 
+  /* bulk select mode */
+  .task.bulk-on{ background:var(--terra-bg); border-radius:8px; }
+  .bulk-bar{ position:fixed; bottom:14px; left:50%; transform:translateX(-50%); z-index:46; background:var(--slate); color:var(--slate-ink); border-radius:16px; padding:10px 14px; display:flex; gap:6px; align-items:center; flex-wrap:wrap; box-shadow:0 18px 40px -12px rgba(0,0,0,.45); max-width:min(96vw,860px); }
+  .bulk-bar b{ font-size:12.5px; margin-right:4px; white-space:nowrap; }
+  .bulk-bar .chip{ background:rgba(255,255,255,.13); border-color:transparent; color:var(--slate-ink); }
+  .bulk-bar .chip:hover{ background:rgba(255,255,255,.25); }
+
   /* sync status chip */
   .sync-chip{ font-size:11px; font-weight:600; color:var(--slate-ink); opacity:.8; background:rgba(255,255,255,.09); padding:5px 11px; border-radius:999px; cursor:pointer; white-space:nowrap; border:none; font-family:inherit; }
   .sync-chip:hover{ opacity:1; background:rgba(255,255,255,.16); }
@@ -636,6 +643,7 @@
   var pendingFocus=null;
   var dragTaskId=null, dragJobId=null, dragNestTarget=null;
   var pendingSubAdd=null;
+  var bulkMode=false, bulkIds={};
   var lastRenderedView=null;
   var IN_CLAUDE=(function(){ try{ return window.self!==window.top || /claude|anthropic|usercontent/i.test(location.hostname); }catch(e){ return true; } })();
   var nav=document.getElementById("nav");
@@ -752,6 +760,14 @@
     if(k.dueLabel) pills+='<span class="pill block">'+esc(k.dueLabel)+'</span>';
     if(k.block) pills+='<span class="pill block">'+k.block+'</span>';
     if(k.at) pills+='<span class="pill block">🕒 '+fmtTime(k.at)+'</span>';
+    if(k.notes) pills+='<span class="pill block" title="'+esc(k.notes)+'">📝</span>';
+    if(bulkMode){
+      var bsel=!!bulkIds[k.id];
+      return '<li class="task '+(k.status==="done"?"done ":"")+(bsel?"bulk-on":"")+'" data-id="'+k.id+'">'+
+        '<button class="chk '+(bsel?"done":"")+'" data-act="bulk-toggle" aria-label="Select task" aria-pressed="'+bsel+'"></button>'+
+        '<div class="task-main" data-act="bulk-toggle"><div class="task-title">'+esc(k.title)+'</div>'+
+        (pills?'<div class="task-meta">'+pills+'</div>':'')+'</div></li>';
+    }
     var subRows="";
     if(k.subs&&k.subs.length){
       var sdn=k.subs.filter(function(s){return s.done;}).length;
@@ -830,7 +846,8 @@
       (isToday?'':'<button class="chip" data-act="daynav" data-d="0">Back to today</button>')+
       (isToday&&streak>=2?'<span class="streak-pill" title="Days in a row with at least one task done">🔥 '+streak+'-day streak</span>':"")+
       (scopeActive()?'<button class="chip" data-act="clearscope" title="Showing a filtered slice — tap to show everything" style="background:var(--warn-bg);border-color:var(--warn-bg);color:var(--warn)">🔍 '+esc(scopeLabel())+' ✕</button>':'')+
-      '<button class="chip" style="margin-left:auto" data-act="panel-toggle" aria-pressed="'+!!S.panelOpen+'">📋 '+(S.panelOpen?"Hide":"Show")+' log'+(doneCount?' · '+doneCount+' done':'')+'</button>'+
+      '<button class="chip" style="margin-left:auto" data-act="'+(bulkMode?'bulk-exit':'bulk-enter')+'" aria-pressed="'+bulkMode+'">'+(bulkMode?'✕ Done selecting':'☑ Select')+'</button>'+
+      '<button class="chip" data-act="panel-toggle" aria-pressed="'+!!S.panelOpen+'">📋 '+(S.panelOpen?"Hide":"Show")+' log'+(doneCount?' · '+doneCount+' done':'')+'</button>'+
       '</div>'+
       '<p class="sub"'+(total?' style="margin-bottom:0"':'')+'>'+status+'</p>'+
       (total?'<div class="day-prog" aria-hidden="true"><span style="width:'+Math.round(100*doneCount/total)+'%"></span></div>':"");
@@ -890,7 +907,30 @@
     html+='</div>'; // today-main
     if(S.panelOpen) html+=sidePanelHtml(vd);
     html+='</div>'; // today-flex
+    if(bulkMode){
+      var n=bulkCount();
+      html+='<div class="bulk-bar"><b>'+n+' selected</b>'+
+        '<button class="chip" data-act="bulk-complete">✓ Complete</button>'+
+        '<button class="chip" data-act="bulk-move" data-to="morning">☀️ Morning</button>'+
+        '<button class="chip" data-act="bulk-move" data-to="afternoon">🌤 Afternoon</button>'+
+        '<button class="chip" data-act="bulk-move" data-to="evening">🌙 Evening</button>'+
+        '<button class="chip" data-act="bulk-move" data-to="anytime">⏳ Anytime</button>'+
+        '<button class="chip" data-act="bulk-move" data-to="someday">💭 Someday</button>'+
+        '<button class="chip" data-act="bulk-move" data-to="tomorrow">→ Tomorrow</button>'+
+        '<button class="chip" data-act="bulk-date">📅 Date…</button>'+
+        '<button class="chip" data-act="bulk-project">📁 Project…</button>'+
+        '<button class="chip" data-act="bulk-delete" style="color:#ffb4a0">✕ Delete</button>'+
+        '<button class="chip" data-act="bulk-exit" style="font-weight:800">Done</button></div>';
+    }
     return html;
+  }
+  function bulkSelected(){ return Object.keys(bulkIds).filter(function(id){ return bulkIds[id] && S.tasks.some(function(k){return k.id===id;}); }); }
+  function bulkCount(){ return bulkSelected().length; }
+  function bulkApply(fn,msg){
+    var ids=bulkSelected();
+    if(!ids.length){ toast("Tap tasks to select them first"); return; }
+    ids.forEach(function(id){ var k=S.tasks.find(function(x){return x.id===id;}); if(k) fn(k); });
+    bulkIds={}; save(); render(); toast(msg.replace("{n}",ids.length));
   }
 
   /* completed + carried log — the hideable side panel */
@@ -957,7 +997,12 @@
     });
     // 5. sync file needs a permission tap after browser restart
     if(syncReconnect && d.indexOf("sync-reconnect")<0) out.push({id:"sync-reconnect",text:'Your <b>sync file</b> needs a quick permission tap after the browser restarted.',action:"Reconnect",act:"sync"});
-    // 6. backup reminder — only when no sync is safeguarding the data
+    // 6. weekly review nudge — start of the week, once per week
+    var wd0=dow(t);
+    if(wd0===0||wd0===1){ var wkid="review-"+addDays(t,-wd0);
+      if(d.indexOf(wkid)<0) out.push({id:wkid,text:'A fresh week — run a <b>2-minute weekly review</b> to clear carried tasks and pick what matters.',action:"Review",act:"review"});
+    }
+    // 7. backup reminder — only when no sync is safeguarding the data
     var synced = (GH&&GH.gistId) || syncHandle;
     var stale = S.lastExport ? diffDays(t,S.lastExport)>=30 : S.tasks.length>=15;
     if(stale && !synced){ var bid="backup-"+t.slice(0,7); if(d.indexOf(bid)<0) out.push({id:bid,text:'Your work saves in this browser automatically, but only here. Turn on <b>☁️ Cloud sync</b> (⋯ menu) or <b>export a backup</b> so a cleared browser or lost device can\'t take it with it.'+(S.lastExport?' Last backup: '+diffDays(t,S.lastExport)+' days ago.':''),action:"Export",act:"export"}); }
@@ -1254,6 +1299,40 @@
         save(); render(); toast(to==="someday"?"Moved to Someday":"Moved to "+to); } }
       else if(act==="tlview"){ S.tlView=a.dataset.v; save(); render(); }
       else if(act==="clearscope"){ S.filterProjects=[]; S.activeProfile="all"; save(); render(); toast("Showing everything"); }
+      else if(act==="bulk-enter"){ bulkMode=true; bulkIds={}; render(); toast("Tap tasks to select them"); }
+      else if(act==="bulk-exit"){ bulkMode=false; bulkIds={}; render(); }
+      else if(act==="bulk-toggle"){ var bid2=(id||anyId); if(bid2){ bulkIds[bid2]=!bulkIds[bid2];
+        var bon=!!bulkIds[bid2];
+        [].forEach.call(document.querySelectorAll('.task[data-id="'+bid2+'"]'),function(li2){
+          li2.classList.toggle("bulk-on",bon);
+          var c2=li2.querySelector('.chk[data-act="bulk-toggle"]'); if(c2){ c2.classList.toggle("done",bon); c2.setAttribute("aria-pressed",bon); }
+        });
+        var bb=document.querySelector(".bulk-bar b"); if(bb) bb.textContent=bulkCount()+" selected"; } }
+      else if(act==="bulk-complete"){ bulkApply(function(k){ k.status="done"; k.completedOn=viewDay; },"✓ {n} completed"); }
+      else if(act==="bulk-move"){ var mto=a.dataset.to;
+        bulkApply(function(k){
+          if(mto==="someday"){ k.day=null; k.block=null; }
+          else if(mto==="anytime"){ if(!k.day) k.day=viewDay; k.block=null; }
+          else if(mto==="tomorrow"){ k.day=addDays(today(),1); k.rollover=0; }
+          else { k.block=mto; if(!k.day) k.day=viewDay; }
+        },"{n} moved"); }
+      else if(act==="bulk-date"){ var bids=bulkSelected(); if(!bids.length){ toast("Tap tasks to select them first"); return; }
+        modal('<h3>Move '+bids.length+' task'+(bids.length===1?"":"s")+' to a date</h3>'+
+          '<div class="fld"><label>Day <span style="text-transform:none;letter-spacing:0;font-weight:600">(empty = someday)</span></label><input id="bd-d" type="date" value="'+today()+'"/></div>'+
+          '<div class="modal-actions"><button class="btn ghost" data-x>Cancel</button><button class="btn primary" id="bd-ok">Move</button></div>');
+        document.querySelector("[data-x]").onclick=close;
+        document.getElementById("bd-ok").onclick=function(){ var dv=document.getElementById("bd-d").value||null; close();
+          bulkApply(function(k){ k.day=dv; if(!dv) k.block=null; k.rollover=0; }, dv?"{n} moved to "+niceDate(dv):"{n} moved to Someday"); }; }
+      else if(act==="bulk-project"){ var bids2=bulkSelected(); if(!bids2.length){ toast("Tap tasks to select them first"); return; }
+        modal('<h3>Tag '+bids2.length+' task'+(bids2.length===1?"":"s")+'</h3>'+
+          '<div class="fld"><label>Project</label><div class="chips" id="bp-list"><button class="chip" data-pid="">No project</button>'+S.projects.map(function(p){return '<button class="chip" data-pid="'+p.id+'">'+esc(p.name)+'</button>';}).join("")+'</div></div>'+
+          '<div class="modal-actions"><button class="btn ghost" data-x>Cancel</button></div>');
+        document.querySelector("[data-x]").onclick=close;
+        document.getElementById("bp-list").onclick=function(e2){ var b2=e2.target.closest(".chip"); if(!b2) return; var pid2=b2.dataset.pid||null; close();
+          bulkApply(function(k){ k.projectId=pid2; },"{n} tagged"); }; }
+      else if(act==="bulk-delete"){ var bids3=bulkSelected(); if(!bids3.length){ toast("Tap tasks to select them first"); return; }
+        confirmModal("Delete "+bids3.length+" task"+(bids3.length===1?"":"s")+"?","They disappear from every list. This can't be undone in bulk.","Delete",function(){
+          S.tasks=S.tasks.filter(function(k){ return !bulkIds[k.id]; }); bulkIds={}; save(); render(); toast("Deleted"); }); }
       else if(act==="newperson"){ openPersonModal(); }
       else if(act==="editperson"){ openPersonModal(S.people.find(function(x){return x.id===anyId;})); }
       else if(act==="logtouch"){ var pp=S.people.find(function(x){return x.id===anyId;}); if(pp){ pp.last=today(); if(pp.cadence) pp.next=addDays(today(),pp.cadence); save(); render(); toast("Logged a touch"); } }
@@ -1267,6 +1346,7 @@
       else if(act==="sugg"){ var s=computeSuggestions().find(function(x){return x.id===a.dataset.sid;});
         if(s&&s.act==="sync"){ if(syncHandle&&syncHandle.requestPermission) syncHandle.requestPermission({mode:"readwrite"}).then(function(p){ if(p==="granted"){ syncReconnect=false; syncRead(); render(); toast("Sync reconnected"); } }); }
         else if(s&&s.act==="export"){ exportBackup(); S.dismissed.push(s.id); save(); render(); }
+        else if(s&&s.act==="review"){ S.dismissed.push(s.id); save(); openReviewModal(); }
         else if(s&&s.data){ addTask(s.data.title,s.data.projectId,null); S.dismissed.push(s.id); save(); render(); toast("Added"); } }
       else if(act==="sugg-x"){ S.dismissed.push(a.dataset.sid); save(); render(); }
       else if(act==="newproj"){ openProjModal(); }
@@ -1496,6 +1576,7 @@
         '<button class="chip" data-i="0" aria-pressed="'+(!priorityV)+'">Normal</button>'+
         '<button class="chip" data-i="1" aria-pressed="'+priorityV+'">★ Important</button></div></div>'+
       '<div class="fld"><label>Subtasks</label><div id="m-subs"></div><input id="m-sub-new" placeholder="Add a subtask — press Enter"/></div>'+
+      '<div class="fld"><label>Notes</label><textarea id="m-notes" style="min-height:56px" placeholder="Details, links, context…">'+esc(base.notes||"")+'</textarea></div>'+
       '<div class="fld"><label>Repeat</label><div class="chips" id="m-freq">'+
         [["once","Once"],["daily","Daily"],["weekly","Weekly"],["everyN","Every N days"]].map(function(f){return '<button class="chip" data-f="'+f[0]+'" aria-pressed="'+(f[0]===freq)+'">'+f[1]+'</button>';}).join("")+'</div>'+
         '<div id="m-ropts" style="margin-top:10px"></div>'+(etp?'<div class="sub" style="font-size:11px;margin-top:6px">This task repeats — changes here update the whole series. Pick “Once” to stop it repeating.</div>':(ed?'<div class="sub" style="font-size:11px;margin-top:6px">Pick a repeat to turn this into a recurring task going forward.</div>':""))+'</div>'+
@@ -1571,13 +1652,14 @@
       if(freq==="weekly"&&!weekdays.length){toast("Pick at least one weekday");return;}
       if(msn&&msn.value.trim()) subs.push({id:uid(),text:msn.value.trim(),done:false});
       var cleanSubs=subs.filter(function(s){return (s.text||"").trim();});
-      if(ed){ ed.title=title; ed.projectId=pid; ed.day=day; ed.block=chosen[0]; ed.at=tv; ed.priority=priorityV; ed.subs=cleanSubs;
+      var ntv=document.getElementById("m-notes").value.trim()||null;
+      if(ed){ ed.title=title; ed.projectId=pid; ed.day=day; ed.block=chosen[0]; ed.at=tv; ed.priority=priorityV; ed.subs=cleanSubs; ed.notes=ntv;
         if(etp){
           if(freq==="once"){ S.templates=S.templates.filter(function(x){return x.id!==etp.id;}); delete ed.tplId; }
           else { etp.title=title; etp.projectId=pid; etp.block=chosen[0]; etp.freq=freq; etp.weekdays=weekdays; etp.interval=+(document.getElementById("m-int")||{}).value||intervalV; etp.priority=priorityV; }
         } else if(freq!=="once"){ var ntp={id:uid(),title:title,projectId:pid,block:chosen[0],freq:freq,start:day||today(),weekdays:weekdays,interval:+(document.getElementById("m-int")||{}).value||2,priority:priorityV}; S.templates.push(ntp); ed.tplId=ntp.id; generateRecurring(today()); }
         save(); close(); render(); toast(etp?(freq==="once"?"Saved — repeat stopped":"Saved — series updated"):(freq!=="once"?"Saved — now repeats":"Saved")); return; }
-      if(freq==="once"){ chosen.forEach(function(bl){ S.tasks.push({id:uid(),title:title,projectId:pid,status:"todo",day:day,block:bl,at:tv,priority:priorityV,rollover:0,subs:cleanSubs.map(function(s){return {id:uid(),text:s.text,done:s.done};}),created:today()}); }); }
+      if(freq==="once"){ chosen.forEach(function(bl){ S.tasks.push({id:uid(),title:title,projectId:pid,status:"todo",day:day,block:bl,at:tv,priority:priorityV,rollover:0,notes:ntv,subs:cleanSubs.map(function(s){return {id:uid(),text:s.text,done:s.done};}),created:today()}); }); }
       else { var tp={id:uid(),title:title,projectId:pid,block:chosen[0],freq:freq,start:day||today(),weekdays:weekdays,interval:+(document.getElementById("m-int")||{}).value||2,priority:priorityV};
         S.templates.push(tp); generateRecurring(today()); }
       save(); close(); render(); toast(freq==="once"&&chosen.length>1?chosen.length+" tasks added":"Task added");
@@ -2296,7 +2378,7 @@
       var q=norm(inp.value);
       if(q.length<2){ out.innerHTML='<div class="empty">Type at least 2 characters</div>'; return; }
       var rows=[];
-      S.tasks.forEach(function(k){ if(rows.length<40 && norm(k.title+" "+(k.subs||[]).map(function(s){return s.text;}).join(" ")).indexOf(q)>=0){ var p=proj(k.projectId); rows.push(row("task",k.id,k.title,(k.day?niceDate(k.day):"someday")+(k.status==="done"?" · done":"")+(p?" · "+p.name:""))); } });
+      S.tasks.forEach(function(k){ if(rows.length<40 && norm(k.title+" "+(k.notes||"")+" "+(k.subs||[]).map(function(s){return s.text;}).join(" ")).indexOf(q)>=0){ var p=proj(k.projectId); rows.push(row("task",k.id,k.title,(k.day?niceDate(k.day):"someday")+(k.status==="done"?" · done":"")+(p?" · "+p.name:""))); } });
       S.people.forEach(function(p){ if(rows.length<40 && (norm(p.name)+" "+norm(p.company)+" "+norm(p.notes)).indexOf(q)>=0) rows.push(row("person",p.id,p.name,p.relationship||p.company||"")); });
       S.jobs.forEach(function(j){ if(rows.length<40 && (norm(j.company)+" "+norm(j.role)+" "+norm(j.notes)).indexOf(q)>=0) rows.push(row("job",j.id,j.company+(j.role?" — "+j.role:""),j.stage||"")); });
       S.projects.forEach(function(p){ if(rows.length<40 && (norm(p.name)+" "+norm(p.notes)).indexOf(q)>=0) rows.push(row("project",p.id,p.name,"")); });
@@ -2330,6 +2412,8 @@
       ["🧭","Show / hide the sidebar",function(){ if(window.innerWidth>1000){ S.sbOpen=!S.sbOpen; save(); applySidebarState(); } else document.body.classList.toggle("sb-open"); }],
       ["◐","Toggle light / dark",function(){ document.getElementById("theme-btn").onclick(); }],
       ["🔍","Search everything",function(){ openSearchModal(); }],
+      ["🧹","Weekly review",function(){ openReviewModal(); }],
+      ["☑","Select multiple tasks (bulk edit)",function(){ view="today"; syncNav(); bulkMode=true; bulkIds={}; render(); toast("Tap tasks to select them"); }],
       ["⌨️","Keyboard shortcuts",function(){ openShortcutsModal(); }],
       ["⤓","Export backup (.json)",exportBackup],
       ["⤓","Export tasks (.csv)",exportCSV],
@@ -2368,7 +2452,7 @@
       if(q.length>=2){
         S.tasks.forEach(function(k){
           if(res.length>=16||k.status==="done") return;
-          if(norm(k.title+" "+(k.subs||[]).map(function(s){return s.text;}).join(" ")).indexOf(q)>=0){
+          if(norm(k.title+" "+(k.notes||"")+" "+(k.subs||[]).map(function(s){return s.text;}).join(" ")).indexOf(q)>=0){
             res.push({icon:"☐",label:k.title,hint:k.day?niceDate(k.day):"someday",run:function(){ openTaskModal({edit:k}); }});
           }
         });
@@ -2392,12 +2476,57 @@
     document.querySelector("[data-x]").onclick=close;
   }
 
+  /* ---------- weekly review — celebrate, clear, choose ---------- */
+  function openReviewModal(){
+    function body(){
+      var t=today(), wk=addDays(t,-6);
+      var doneWk=S.tasks.filter(function(k){return k.completedOn&&k.completedOn>=wk;});
+      var byDay={}; doneWk.forEach(function(k){ byDay[k.completedOn]=(byDay[k.completedOn]||0)+1; });
+      var best=Object.keys(byDay).sort(function(a,b){return byDay[b]-byDay[a];})[0];
+      var carried=S.tasks.filter(function(k){return k.status==="todo"&&(k.rollover||0)>=1;}).slice(0,8);
+      var someday=S.tasks.filter(function(k){return !k.day&&k.status!=="done";}).slice(0,6);
+      var h='<h3>🧹 Weekly review</h3><p class="sub">Two minutes: celebrate, clear, choose.</p>';
+      h+='<div class="ins-tiles" style="margin-top:6px">'+
+        '<div class="ins-tile"><b>✅ '+doneWk.length+'</b><span>done · last 7 days</span></div>'+
+        '<div class="ins-tile"><b>🔥 '+doneStreak()+'</b><span>day streak</span></div>'+
+        (best?'<div class="ins-tile"><b>🏆 '+DOWNAMES[dow(best)]+'</b><span>best day · '+byDay[best]+' done</span></div>':'')+'</div>';
+      h+='<div class="fld"><label>Carried over — decide, don\'t drag</label>'+
+        (carried.length?carried.map(function(k){
+          return '<div class="panel-task"><div class="task-title" style="font-size:13.5px">'+esc(k.title)+' <span class="pill aged">'+k.rollover+'d</span></div>'+
+            '<div class="panel-move">'+[["today","📅 Today"],["tomorrow","→ Tomorrow"],["someday","💭 Someday"],["done","✓ Done"],["drop","✕ Drop"]].map(function(m){return '<button data-rv="'+m[0]+'" data-id="'+k.id+'">'+m[1]+'</button>';}).join("")+'</div></div>';
+        }).join(""):'<div class="empty">Nothing carried 🎉</div>')+'</div>';
+      h+='<div class="fld"><label>Someday shelf — anything ready to schedule?</label>'+
+        (someday.length?someday.map(function(k){
+          return '<div class="panel-task"><div class="task-title" style="font-size:13.5px">'+esc(k.title)+'</div>'+
+            '<div class="panel-move">'+[["today","📅 Today"],["tomorrow","→ Tomorrow"]].map(function(m){return '<button data-rv="'+m[0]+'" data-id="'+k.id+'">'+m[1]+'</button>';}).join("")+'</div></div>';
+        }).join(""):'<div class="empty">The shelf is clear</div>')+'</div>';
+      h+='<div class="modal-actions"><button class="btn primary" data-x>Done — feels lighter</button></div>';
+      return h;
+    }
+    function wire(){
+      document.querySelector("[data-x]").onclick=function(){ close(); render(); };
+      document.querySelector(".modal").onclick=function(e){
+        var b=e.target.closest("[data-rv]"); if(!b) return;
+        var k=S.tasks.find(function(x){return x.id===b.dataset.id;}); if(!k) return;
+        var m=b.dataset.rv;
+        if(m==="today"){ k.day=today(); k.rollover=0; }
+        else if(m==="tomorrow"){ k.day=addDays(today(),1); k.rollover=0; }
+        else if(m==="someday"){ k.day=null; k.block=null; k.rollover=0; }
+        else if(m==="done"){ k.status="done"; k.completedOn=today(); }
+        else if(m==="drop"){ S.tasks=S.tasks.filter(function(x){return x.id!==k.id;}); }
+        save(); rebuild();
+      };
+    }
+    function rebuild(){ var m=document.querySelector(".modal"); if(m){ m.innerHTML=body(); wire(); } }
+    modal(body()); wire();
+  }
+
   /* ---------- data exports (CSV / ICS) ---------- */
   function csvCell(v){ v=(v==null?"":String(v)); return '"'+v.replace(/"/g,'""')+'"'; }
   function exportCSV(){
-    var head=["Title","Status","Day","Block","Time","Project","Profile","Important","Carried days","Created","Completed on","Subtasks"];
+    var head=["Title","Status","Day","Block","Time","Project","Profile","Important","Carried days","Created","Completed on","Subtasks","Notes"];
     var rows=S.tasks.map(function(k){ var p=proj(k.projectId); var pr=p&&p.profileId?profileById(p.profileId):null;
-      return [k.title,k.status,k.day||"someday",k.block||"",k.at||"",p?p.name:"",pr?pr.name:"",k.priority?"yes":"",k.rollover||0,k.created||"",k.completedOn||"",(k.subs||[]).map(function(s){return (s.done?"[x] ":"[ ] ")+s.text;}).join(" | ")].map(csvCell).join(",");
+      return [k.title,k.status,k.day||"someday",k.block||"",k.at||"",p?p.name:"",pr?pr.name:"",k.priority?"yes":"",k.rollover||0,k.created||"",k.completedOn||"",(k.subs||[]).map(function(s){return (s.done?"[x] ":"[ ] ")+s.text;}).join(" | "),k.notes||""].map(csvCell).join(",");
     });
     var blob=new Blob(["﻿"+head.map(csvCell).join(",")+"\n"+rows.join("\n")],{type:"text/csv"});
     var a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="daybook-tasks-"+today()+".csv"; a.click();
@@ -2519,7 +2648,7 @@
   document.getElementById("cap-btn").onclick=function(){ view="hub"; [].forEach.call(nav.children,function(c){c.setAttribute("aria-current",c.dataset.view==="hub"?"true":"false");}); render(); document.querySelector(".hub-cap")&&document.getElementById("cap-in")&&document.getElementById("cap-in").focus(); };
   var gSeq=0;
   document.addEventListener("keydown",function(e){
-    if(e.key==="Escape"){ var mr=document.getElementById("modal-root"); if(mr&&mr.children.length) close(); return; }
+    if(e.key==="Escape"){ var mr=document.getElementById("modal-root"); if(mr&&mr.children.length){ close(); } else if(bulkMode){ bulkMode=false; bulkIds={}; render(); } return; }
     if((e.metaKey||e.ctrlKey)&&(e.key==="k"||e.key==="K")){
       e.preventDefault();
       var mr2=document.getElementById("modal-root"); if(mr2.children.length) close();
