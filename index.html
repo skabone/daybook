@@ -759,9 +759,11 @@
   document.getElementById("sb-scrim").onclick=function(){ document.body.classList.remove("sb-open"); };
   function renderGlobalHead(){
     var el=document.getElementById("global-head"); if(!el) return;
-    el.innerHTML=(S.name?'<span class="gh-name">'+esc(S.name)+'</span>':"")+
+    el.innerHTML=(S.name?'<span class="gh-name">'+esc(S.name)+'</span>':'<button class="chip" id="gh-setname" style="padding:3px 11px">👋 Add your name</button>')+
       '<span class="gh-date">'+fullDate(today())+'</span>'+
       '<span class="clock" id="g-clock">'+clockHtml()+'</span>';
+    var b=document.getElementById("gh-setname");
+    if(b) b.onclick=function(){ document.getElementById("menu-btn").onclick(); setTimeout(function(){ var n=document.getElementById("set-name"); if(n) n.focus(); },0); };
   }
 
   /* ---------- TODAY ---------- */
