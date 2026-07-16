@@ -535,9 +535,17 @@
   function meta(n, c, prop) { var m=document.createElement("meta"); if(prop)m.setAttribute("property",n);else m.name=n; m.content=c; document.head.appendChild(m); }
   if (!document.querySelector('meta[name="viewport"]')) meta("viewport","width=device-width, initial-scale=1, viewport-fit=cover");
   meta("apple-mobile-web-app-capable","yes");
+  meta("mobile-web-app-capable","yes");
   meta("apple-mobile-web-app-title","Daybook");
   meta("apple-mobile-web-app-status-bar-style","default");
   meta("theme-color","#565165");
+  /* installable-app manifest + icon (data URIs — keeps this a single file) */
+  var DB_ICON="data:image/svg+xml,"+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" fill="#565165"/><rect x="118" y="126" width="276" height="292" rx="30" fill="#fbfaf5"/><rect x="118" y="126" width="54" height="292" rx="0" fill="#c9724a"/><circle cx="145" cy="182" r="9" fill="#fbfaf5"/><circle cx="145" cy="256" r="9" fill="#fbfaf5"/><circle cx="145" cy="330" r="9" fill="#fbfaf5"/><rect x="206" y="190" width="150" height="18" rx="9" fill="#e2ddd1"/><rect x="206" y="248" width="150" height="18" rx="9" fill="#c9724a" opacity=".5"/><rect x="206" y="306" width="104" height="18" rx="9" fill="#e2ddd1"/></svg>');
+  (function(){
+    var mf={name:"Daybook — Pencil Me In",short_name:"Daybook",description:"A day planner in a single file — offline, private, yours.",start_url:"./",scope:"./",display:"standalone",background_color:"#f3efe6",theme_color:"#565165",icons:[{src:DB_ICON,sizes:"any",type:"image/svg+xml",purpose:"any maskable"}]};
+    var l=document.createElement("link"); l.rel="manifest"; l.href="data:application/manifest+json,"+encodeURIComponent(JSON.stringify(mf)); document.head.appendChild(l);
+    var ai=document.createElement("link"); ai.rel="apple-touch-icon"; ai.href=DB_ICON; document.head.appendChild(ai);
+  })();
 
   /* ---------- storage ---------- */
   var KEY = "daybook-v1";
@@ -2803,6 +2811,7 @@
   document.addEventListener("visibilitychange",function(){ if(!document.hidden) checkDay(); });
   setInterval(checkDay,60000);
   if(navigator.storage&&navigator.storage.persist){ try{ navigator.storage.persist(); }catch(e){} }
+  if("serviceWorker" in navigator && (location.protocol==="https:"||location.hostname==="localhost")){ try{ navigator.serviceWorker.register("sw.js").catch(function(){}); }catch(e){} }
   idbGet("syncName",function(n){ syncName=n; updateSyncStatus(); });
   updateSyncStatus();
   idbGet("syncHandle",function(h){ if(!h||!h.queryPermission) return; syncHandle=h;
