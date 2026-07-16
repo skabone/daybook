@@ -470,8 +470,22 @@
   .ins-proj:last-child{ border-bottom:none; }
   .ins-proj .sb-name{ flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
+  /* rich text notes */
+  .rte-tools{ display:flex; gap:3px; margin-bottom:6px; flex-wrap:wrap; align-items:center; }
+  .rte-tools button{ font-family:inherit; font-size:13px; font-weight:800; min-width:26px; padding:0 7px; height:26px; border-radius:7px; border:1.5px solid var(--line); background:var(--card); color:var(--ink-soft); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; line-height:1; }
+  .rte-tools button:hover{ border-color:var(--terra); color:var(--terra-deep); }
+  .rte-tools button[aria-pressed="true"]{ background:var(--slate); color:var(--slate-ink); border-color:var(--slate); }
+  .rte-sep{ width:1px; height:18px; background:var(--line); margin:0 3px; }
+  .rte-body{ min-height:90px; font-family:inherit; font-size:14.5px; line-height:1.6; color:var(--ink); padding:4px 2px; outline:none; }
+  .rte-body.empty-rte:before{ content:attr(data-placeholder); color:var(--ink-faint); }
+  .rte-body ul,.rte-body ol{ padding-left:22px; margin:4px 0; }
+  .rte-body p,.rte-body div{ margin:0 0 4px; }
+  .rte-compact .rte-body{ font-size:13px; background:var(--sheet); border:1px solid var(--line-soft); border-radius:10px; padding:8px 10px; min-height:54px; }
+  .rte-compact .rte-tools button{ min-width:22px; height:22px; font-size:11px; }
+  .rte-compact:focus-within .rte-body{ border-color:var(--terra); }
+
   @media print{
-    .appbar,.capture,.sugg,.sugg-note,.hub-cap,.task-x,.task-star,.inline-row,.chip,.toast,.fab,button.add,#modal-root,body::before{ display:none !important; }
+    .appbar,.capture,.sugg,.sugg-note,.hub-cap,.task-x,.task-star,.inline-row,.chip,.toast,.fab,button.add,#modal-root,body::before,.rte-tools{ display:none !important; }
     body{ background:#fff; color:#000; }
     .card,details.fold,.cal-cell,.wk-col,.proj-card{ border-color:#bbb; box-shadow:none; }
     .wrap{ max-width:100%; padding:0; }
@@ -565,6 +579,21 @@
     if(typeof d.welcomed!=="boolean")d.welcomed=true;
     d.archive=d.archive||[];
     d.projects.forEach(function(p){ if(p.profileId===undefined)p.profileId=null; p.fav=!!p.fav; });
+    if(!d.notesRTE){
+      Object.keys(d.notes||{}).forEach(function(k){ if(d.notes[k]) d.notes[k]=plainToHtml(d.notes[k]); });
+      d.projects.forEach(function(p){ if(p.notes) p.notes=plainToHtml(p.notes); });
+      d.people.forEach(function(pe){ if(pe.notes) pe.notes=plainToHtml(pe.notes); });
+      d.jobs.forEach(function(j){ if(j.notes) j.notes=plainToHtml(j.notes); });
+      d.tasks.forEach(function(k){ if(k.notes) k.notes=plainToHtml(k.notes); });
+      d.archive.forEach(function(k){ if(k.notes) k.notes=plainToHtml(k.notes); });
+      d.notesRTE=true;
+    }
+    Object.keys(d.notes||{}).forEach(function(k){ if(d.notes[k]) d.notes[k]=sanitizeRTE(d.notes[k]); });
+    d.projects.forEach(function(p){ if(p.notes) p.notes=sanitizeRTE(p.notes); });
+    d.people.forEach(function(pe){ if(pe.notes) pe.notes=sanitizeRTE(pe.notes); });
+    d.jobs.forEach(function(j){ if(j.notes) j.notes=sanitizeRTE(j.notes); });
+    d.tasks.forEach(function(k){ if(k.notes) k.notes=sanitizeRTE(k.notes); });
+    d.archive.forEach(function(k){ if(k.notes) k.notes=sanitizeRTE(k.notes); });
     return mergeSpuCoursePlan(d); }
   function load(){ try{ var d=JSON.parse(localStorage.getItem(KEY)); if(d&&d.version) return normalize(d); }catch(e){ try{ var raw=localStorage.getItem(KEY); if(raw) localStorage.setItem(KEY+"-corrupt",raw); }catch(e2){} } return seed(); }
   function save(){ S.savedAt=Date.now(); try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){ toast("Storage full — export a backup"); } scheduleSync(); scheduleGh(); updateSyncStatus(); }
@@ -573,7 +602,7 @@
     return mergeSpuCoursePlan({
       version:1, lastOpen:null, theme:null,
       profiles:[prHome,prWork], activeProfile:"all", filterProjects:[], sbOpen:true,
-      remind:false, welcomed:false, archive:[],
+      remind:false, welcomed:false, archive:[], notesRTE:true,
       projects:[
         {id:uid(),name:"Personal",color:"var(--p0)",notes:"",profileId:prHome.id,fav:false},
         {id:uid(),name:"Work",color:"var(--p1)",notes:"",profileId:prWork.id,fav:false}
@@ -659,6 +688,71 @@
   function projColor(id){ var p=proj(id); return p?p.color:"var(--ink-faint)"; }
   function esc(s){ return (s||"").replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];}); }
   function el(html){ var d=document.createElement("div"); d.innerHTML=html.trim(); return d.firstChild; }
+
+  /* ---------- rich text notes (bold/italic/underline/lists) ---------- */
+  var RTE_ALLOWED={B:1,STRONG:1,I:1,EM:1,U:1,UL:1,OL:1,LI:1,BR:1,P:1,DIV:1,SPAN:1};
+  function sanitizeRTE(html){
+    var d=document.createElement("div"); d.innerHTML=String(html||"");
+    (function clean(node){
+      var child=node.firstChild;
+      while(child){
+        var next=child.nextSibling;
+        if(child.nodeType===1){
+          if(!RTE_ALLOWED[child.tagName]){ while(child.firstChild) node.insertBefore(child.firstChild,child); node.removeChild(child); }
+          else { for(var i=child.attributes.length-1;i>=0;i--) child.removeAttribute(child.attributes[i].name); clean(child); }
+        } else if(child.nodeType!==3){ node.removeChild(child); }
+        child=next;
+      }
+    })(d);
+    return d.innerHTML;
+  }
+  function plainToHtml(s){ return esc(s||"").replace(/\r\n|\r|\n/g,"<br>"); }
+  function rteIsEmpty(html){ var t=(html||"").replace(/<[^>]*>/g,"").replace(/&nbsp;/g," ").trim(); return t.length===0; }
+  function rteValue(id){ var e=document.getElementById(id); if(!e) return ""; var h=e.innerHTML; return rteIsEmpty(h)?"":h; }
+  function htmlToText(html){
+    var s=String(html||"").replace(/<li[^>]*>/gi,"• ").replace(/<\/(li|div|p)>/gi,"\n").replace(/<br\s*\/?>/gi,"\n");
+    var d=document.createElement("div"); d.innerHTML=s;
+    return (d.textContent||"").replace(/\n{3,}/g,"\n\n").trim();
+  }
+  var RTE_BTNS=[["bold","<b>B</b>","Bold (Ctrl+B)"],["italic","<i>I</i>","Italic (Ctrl+I)"],["underline","<u>U</u>","Underline (Ctrl+U)"],null,
+    ["insertUnorderedList","•","Bullet list"],["insertOrderedList","1.","Numbered list"],null,["removeFormat","Clear","Clear formatting"]];
+  function richTextHtml(rteId,html,placeholder,minH,bodyId,cls){
+    var tb=RTE_BTNS.map(function(b){ return b?('<button type="button" data-cmd="'+b[0]+'" title="'+esc(b[2])+'">'+b[1]+'</button>'):'<span class="rte-sep"></span>'; }).join("");
+    var clean=sanitizeRTE(html||"");
+    return '<div class="rte'+(cls?" "+cls:"")+'" data-rte-id="'+esc(rteId||bodyId||"")+'"><div class="rte-tools">'+tb+'</div>'+
+      '<div class="rte-body"'+(bodyId?' id="'+esc(bodyId)+'"':"")+' contenteditable="true" role="textbox" aria-multiline="true" aria-label="'+esc(placeholder||"Notes")+'" data-placeholder="'+esc(placeholder||"")+'" style="'+(minH?"min-height:"+minH+"px":"")+'">'+clean+'</div></div>';
+  }
+  function wireRTE(scope){
+    scope.querySelectorAll(".rte").forEach(function(w){
+      var body=w.querySelector(".rte-body"), tools=w.querySelector(".rte-tools");
+      function sync(){
+        ["bold","italic","underline","insertUnorderedList","insertOrderedList"].forEach(function(cmd){
+          var b=tools.querySelector('[data-cmd="'+cmd+'"]'); if(!b) return;
+          var on=false; try{ on=document.queryCommandState(cmd); }catch(e){}
+          b.setAttribute("aria-pressed",on);
+        });
+        body.classList.toggle("empty-rte", rteIsEmpty(body.innerHTML));
+      }
+      tools.addEventListener("mousedown",function(e){ e.preventDefault(); });
+      tools.onclick=function(e){ var b=e.target.closest("[data-cmd]"); if(!b) return; body.focus(); document.execCommand(b.dataset.cmd,false,null); sync(); body.dispatchEvent(new Event("input",{bubbles:true})); };
+      body.addEventListener("keydown",function(e){
+        if(!(e.metaKey||e.ctrlKey)) return; var k=e.key.toLowerCase();
+        if(k==="b"||k==="i"||k==="u"){ e.preventDefault(); document.execCommand(k==="b"?"bold":(k==="i"?"italic":"underline")); sync(); body.dispatchEvent(new Event("input",{bubbles:true})); }
+      });
+      body.addEventListener("paste",function(e){
+        e.preventDefault();
+        var cd=e.clipboardData||window.clipboardData;
+        var htxt=cd?cd.getData("text/html"):"", ttxt=cd?cd.getData("text/plain"):"";
+        var clean=htxt?sanitizeRTE(htxt):esc(ttxt).replace(/\r\n|\r|\n/g,"<br>");
+        document.execCommand("insertHTML",false,clean);
+        sync(); body.dispatchEvent(new Event("input",{bubbles:true}));
+      });
+      body.addEventListener("input",sync);
+      body.addEventListener("keyup",sync);
+      body.addEventListener("mouseup",sync);
+      sync();
+    });
+  }
   function toast(msg){ var t=document.getElementById("toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(t._h); t._h=setTimeout(function(){t.classList.remove("show");},2200); }
   function toastUndo(msg, fn){ var t=document.getElementById("toast"); t.textContent=msg+" "; var b=document.createElement("button"); b.textContent="Undo"; b.style.cssText="margin-left:8px;background:transparent;border:none;color:var(--terra);font-weight:800;cursor:pointer;font-family:inherit;font-size:13.5px"; b.onclick=function(){ fn(); t.classList.remove("show"); }; t.appendChild(b); t.classList.add("show"); clearTimeout(t._h); t._h=setTimeout(function(){t.classList.remove("show");},5500); }
 
@@ -788,7 +882,7 @@
     if(k.dueLabel) pills+='<span class="pill block">'+esc(k.dueLabel)+'</span>';
     if(k.block) pills+='<span class="pill block">'+k.block+'</span>';
     if(k.at) pills+='<span class="pill block">🕒 '+fmtTime(k.at)+'</span>';
-    if(k.notes) pills+='<span class="pill block" title="'+esc(k.notes)+'">📝</span>';
+    if(k.notes) pills+='<span class="pill block" title="'+esc(htmlToText(k.notes))+'">📝</span>';
     if(bulkMode){
       var bsel=!!bulkIds[k.id];
       return '<li class="task '+(k.status==="done"?"done ":"")+(bsel?"bulk-on":"")+'" data-id="'+k.id+'">'+
@@ -930,7 +1024,7 @@
     S.habits.forEach(function(h){ habitTotal+=h.goal; habitDone+=Math.min((S.habitLog[vd]||{})[h.id]||0,h.goal); });
     html+='<div class="grid2">'+
       fold("habits","Habits &amp; wellness",hb,foldProg(habitDone,habitTotal))+
-      fold("notes","Notes",'<textarea class="notes" id="notes-area" placeholder="Jot anything — ideas, blockers, wins…">'+esc(S.notes[vd]||"")+'</textarea>')+
+      fold("notes","Notes",richTextHtml("daily",S.notes[vd]||"","Jot anything — ideas, blockers, wins…",110))+
       '</div>';
     html+='</div>'; // today-main
     if(S.panelOpen) html+=sidePanelHtml(vd);
@@ -1088,7 +1182,7 @@
       }).join(""):'<div class="empty">No open tasks 🎉</div>');
       if(ts.filter(function(k){return k.status==="todo";}).length>6) html+='<div class="cal-more">+'+(ts.filter(function(k){return k.status==="todo";}).length-6)+' more</div>';
       html+='</ul>';
-      html+='<textarea class="proj-notes" data-pid="'+p.id+'" placeholder="Project notes…">'+esc(p.notes||"")+'</textarea>';
+      html+=richTextHtml("proj:"+p.id,p.notes||"","Project notes…",70,null,"rte-compact");
       html+='<div style="display:flex;gap:8px;margin-top:8px"><button class="chip" data-act="editproj" data-pid="'+p.id+'">edit</button>'+
         '<button class="chip" data-act="milestone" data-pid="'+p.id+'">+ milestone</button>'+
         '<button class="chip" data-act="phase" data-pid="'+p.id+'">+ phase</button></div>';
@@ -1271,10 +1365,13 @@
     if(pendingFocus){ var pf=pendingFocus==="focus" ? v.querySelector('.inline-add[data-focus="1"]') : v.querySelector('.inline-add[data-block="'+pendingFocus+'"]'); pendingFocus=null; if(pf){ pf.focus(); } }
     v.querySelectorAll("details.fold").forEach(function(d){ d.addEventListener("toggle",function(){ S.collapsed[d.dataset.fold]=!d.open; save(); }); });
     updateClock();
-    var na=document.getElementById("notes-area");
-    if(na) na.oninput=function(){ S.notes[viewDay]=na.value; save(); };
-    // project notes
-    v.querySelectorAll(".proj-notes").forEach(function(ta){ ta.oninput=function(){ var p=proj(ta.dataset.pid); if(p){p.notes=ta.value; save();} }; });
+    wireRTE(v);
+    var dailyBody=v.querySelector('.rte[data-rte-id="daily"] .rte-body');
+    if(dailyBody) dailyBody.oninput=function(){ S.notes[viewDay]=dailyBody.innerHTML; save(); };
+    v.querySelectorAll('.rte[data-rte-id^="proj:"] .rte-body').forEach(function(pb){
+      var pid=pb.closest(".rte").dataset.rteId.slice(5);
+      pb.oninput=function(){ var p=proj(pid); if(p){ p.notes=pb.innerHTML; save(); } };
+    });
     // habit dots
     v.querySelectorAll(".dots").forEach(function(row){
       row.onclick=function(e){ var b=e.target.closest(".dot"); if(!b)return; var hid=row.dataset.hid; var i=+b.dataset.i;
@@ -1565,6 +1662,7 @@
   function modal(inner){ var root=document.getElementById("modal-root");
     if(!root.children.length) lastFocus=document.activeElement;
     root.innerHTML='<div class="scrim" id="scrim"><div class="modal" role="dialog" aria-modal="true">'+inner+'</div></div>';
+    wireRTE(root);
     document.getElementById("scrim").onclick=function(e){ if(e.target.id==="scrim") close(); };
     var m=root.querySelector(".modal");
     root.onkeydown=function(e){ if(e.key!=="Tab") return;
@@ -1627,7 +1725,7 @@
         '<button class="chip" data-i="0" aria-pressed="'+(!priorityV)+'">Normal</button>'+
         '<button class="chip" data-i="1" aria-pressed="'+priorityV+'">★ Important</button></div></div>'+
       '<div class="fld"><label>Subtasks</label><div id="m-subs"></div><input id="m-sub-new" placeholder="Add a subtask — press Enter"/></div>'+
-      '<div class="fld"><label>Notes</label><textarea id="m-notes" style="min-height:56px" placeholder="Details, links, context…">'+esc(base.notes||"")+'</textarea></div>'+
+      '<div class="fld"><label>Notes</label>'+richTextHtml(null,base.notes||"","Details, links, context…",56,"m-notes","rte-compact")+'</div>'+
       '<div class="fld"><label>Repeat</label><div class="chips" id="m-freq">'+
         [["once","Once"],["daily","Daily"],["weekly","Weekly"],["everyN","Every N days"]].map(function(f){return '<button class="chip" data-f="'+f[0]+'" aria-pressed="'+(f[0]===freq)+'">'+f[1]+'</button>';}).join("")+'</div>'+
         '<div id="m-ropts" style="margin-top:10px"></div>'+(etp?'<div class="sub" style="font-size:11px;margin-top:6px">This task repeats — changes here update the whole series. Pick “Once” to stop it repeating.</div>':(ed?'<div class="sub" style="font-size:11px;margin-top:6px">Pick a repeat to turn this into a recurring task going forward.</div>':""))+'</div>'+
@@ -1704,7 +1802,7 @@
       if(freq==="weekly"&&!weekdays.length){toast("Pick at least one weekday");return;}
       if(msn&&msn.value.trim()) subs.push({id:uid(),text:msn.value.trim(),done:false});
       var cleanSubs=subs.filter(function(s){return (s.text||"").trim();});
-      var ntv=document.getElementById("m-notes").value.trim()||null;
+      var ntv=rteValue("m-notes")||null;
       if(ed){ ed.title=title; ed.projectId=pid; ed.day=day; ed.block=chosen[0]; ed.at=tv; ed.priority=priorityV; ed.subs=cleanSubs; ed.notes=ntv;
         if(etp){
           if(freq==="once"){ S.templates=S.templates.filter(function(x){return x.id!==etp.id;}); delete ed.tplId; }
@@ -1930,11 +2028,11 @@
       (evs.length?evs.map(function(e){return '<li class="task" data-id="'+e.id+'"><span class="dot" style="background:'+(e.color||projColor(e.projectId))+';border-color:transparent;cursor:default"></span><div class="task-main"'+(e.sourceId?' style="cursor:default"':' data-dact="editev" title="Tap to edit"')+'><div class="task-title">'+esc(e.title)+'</div>'+(e.sourceId?'<div class="task-meta"><span class="pill block">subscribed</span></div>':"")+'</div>'+(e.sourceId?"":'<button class="task-x" data-dact="delev" style="opacity:1" aria-label="delete">✕</button>')+'</li>';}).join(""):'<div class="empty">No events</div>')+'</ul></div>';
     var fitems=S.focus[ds]||[];
     if(fitems.length) body+='<div class="fld"><label>Focus that day</label><ul class="tasks">'+fitems.map(function(f){return '<li class="task '+(f.done?"done":"")+'"><span class="dot '+(f.done?"on":"")+'" style="cursor:default"></span><div class="task-main" style="cursor:default"><div class="task-title">'+esc(f.text)+'</div>'+(f.subs&&f.subs.length?'<div class="task-meta"><span class="pill subs-n">☑ '+f.subs.filter(function(s){return s.done;}).length+'/'+f.subs.length+'</span></div>':"")+'</div></li>';}).join("")+'</ul></div>';
-    body+='<div class="fld"><label>Notes</label><textarea id="d-note" class="proj-notes" style="min-height:64px" placeholder="Nothing written this day — add a note…">'+esc(S.notes[ds]||"")+'</textarea></div>';
+    body+='<div class="fld"><label>Notes</label>'+richTextHtml("day:"+ds,S.notes[ds]||"","Nothing written this day — add a note…",64,"d-note","rte-compact")+'</div>';
     body+='<div class="modal-actions"><button class="btn ghost" data-x>Close</button><button class="btn" id="d-addev">+ Event</button><button class="btn primary" id="d-addtask">+ Task</button></div>';
     modal(body);
     var dn=document.getElementById("d-note");
-    if(dn) dn.oninput=function(){ S.notes[ds]=dn.value; save(); var na=document.getElementById("notes-area"); if(na&&ds===today()) na.value=dn.value; };
+    if(dn) dn.oninput=function(){ S.notes[ds]=dn.innerHTML; save(); var db=document.querySelector('.rte[data-rte-id="daily"] .rte-body'); if(db&&ds===today()) db.innerHTML=dn.innerHTML; };
     document.querySelector("[data-x]").onclick=close;
     document.getElementById("d-addtask").onclick=function(){ close(); openTaskModal({day:ds}); };
     document.getElementById("d-addev").onclick=function(){ close(); openEventModal(ds); };
@@ -2275,14 +2373,14 @@
       '<div class="fld"><label>Follow up every N days</label><input id="pe-cad" type="number" min="0" value="'+(p.cadence||"")+'" placeholder="e.g. 14"/></div></div>'+
       '<div class="row"><div class="fld"><label>Last contact</label><input id="pe-last" type="date" value="'+(p.last||"")+'"/></div>'+
       '<div class="fld"><label>Next follow-up</label><input id="pe-next" type="date" value="'+(p.next||"")+'"/></div></div>'+
-      '<div class="fld"><label>Notes</label><textarea id="pe-notes" style="min-height:64px" placeholder="How you know them, what to remember, what to ask next…">'+esc(p.notes)+'</textarea></div>'+
+      '<div class="fld"><label>Notes</label>'+richTextHtml(null,p.notes||"","How you know them, what to remember, what to ask next…",64,"pe-notes","rte-compact")+'</div>'+
       '<div class="fld"><label>Color</label><div class="swatches" id="pe-sw">'+COLORS.map(function(c){return '<button class="sw" style="background:'+c+'" data-c="'+c+'" aria-pressed="'+(c===p.color)+'"></button>';}).join("")+'</div></div>'+
       '<div class="modal-actions">'+(editing?'<button class="btn ghost" id="pe-del" style="margin-right:auto;color:var(--terra-deep)">Delete</button>':"")+'<button class="btn ghost" data-x>Cancel</button><button class="btn primary" id="m-save">Save</button></div>');
     var color=p.color; var sw=document.getElementById("pe-sw");
     sw.onclick=function(e){ var b=e.target.closest(".sw"); if(!b)return; color=b.dataset.c; [].forEach.call(sw.children,function(c){c.setAttribute("aria-pressed",c===b);}); };
     document.querySelector("[data-x]").onclick=close;
     document.getElementById("m-save").onclick=function(){ var name=document.getElementById("pe-name").value.trim(); if(!name){toast("Name?");return;}
-      var data={name:name,relationship:document.getElementById("pe-rel").value.trim(),company:document.getElementById("pe-co").value.trim(),cadence:+document.getElementById("pe-cad").value||0,last:document.getElementById("pe-last").value,next:document.getElementById("pe-next").value,notes:document.getElementById("pe-notes").value.trim(),color:color};
+      var data={name:name,relationship:document.getElementById("pe-rel").value.trim(),company:document.getElementById("pe-co").value.trim(),cadence:+document.getElementById("pe-cad").value||0,last:document.getElementById("pe-last").value,next:document.getElementById("pe-next").value,notes:rteValue("pe-notes"),color:color};
       if(editing){ for(var k in data) p[k]=data[k]; } else { data.id=uid(); S.people.push(data); }
       save(); close(); render(); };
     if(editing) document.getElementById("pe-del").onclick=function(){ confirmModal("Delete this person?","Their card and notes are removed.","Delete",function(){ S.people=S.people.filter(function(x){return x.id!==p.id;}); save(); render(); }); };
@@ -2382,11 +2480,11 @@
       '<div class="row"><div class="fld"><label>Stage</label><select id="j-stage">'+JOB_STAGES.map(function(s){return '<option '+(s===(j.stage||"Saved")?"selected":"")+'>'+s+'</option>';}).join("")+'</select></div>'+
       '<div class="fld"><label>Next step</label><input id="j-next" value="'+esc(j.next)+'" placeholder="e.g. Call Tue 2pm"/></div></div>'+
       '<div class="fld"><label>Link</label><input id="j-link" value="'+esc(j.link)+'" placeholder="https://…"/></div>'+
-      '<div class="fld"><label>Notes</label><textarea id="j-notes" style="min-height:60px">'+esc(j.notes)+'</textarea></div>'+
+      '<div class="fld"><label>Notes</label>'+richTextHtml(null,j.notes||"","",60,"j-notes","rte-compact")+'</div>'+
       '<div class="modal-actions">'+(editing?'<button class="btn ghost" id="j-del" style="margin-right:auto;color:var(--terra-deep)">Delete</button>':"")+'<button class="btn ghost" data-x>Cancel</button><button class="btn primary" id="m-save">Save</button></div>');
     document.querySelector("[data-x]").onclick=close;
     document.getElementById("m-save").onclick=function(){ var co=document.getElementById("j-co").value.trim(); if(!co){toast("Company name?");return;}
-      var data={company:co,role:document.getElementById("j-role").value.trim(),stage:document.getElementById("j-stage").value,next:document.getElementById("j-next").value.trim(),link:document.getElementById("j-link").value.trim(),notes:document.getElementById("j-notes").value.trim()};
+      var data={company:co,role:document.getElementById("j-role").value.trim(),stage:document.getElementById("j-stage").value,next:document.getElementById("j-next").value.trim(),link:document.getElementById("j-link").value.trim(),notes:rteValue("j-notes")};
       if(editing){ for(var k in data) j[k]=data[k]; } else { data.id=uid(); S.jobs.push(data); }
       save(); close(); render(); };
     if(editing) document.getElementById("j-del").onclick=function(){ confirmModal("Delete this job?","It's removed from the board.","Delete",function(){ S.jobs=S.jobs.filter(function(x){return x.id!==j.id;}); save(); render(); }); };
@@ -2452,7 +2550,7 @@
       var q=norm(inp.value);
       if(q.length<2){ out.innerHTML='<div class="empty">Type at least 2 characters</div>'; return; }
       var rows=[];
-      S.tasks.forEach(function(k){ if(rows.length<40 && norm(k.title+" "+(k.notes||"")+" "+(k.subs||[]).map(function(s){return s.text;}).join(" ")).indexOf(q)>=0){ var p=proj(k.projectId); rows.push(row("task",k.id,k.title,(k.day?niceDate(k.day):"someday")+(k.status==="done"?" · done":"")+(p?" · "+p.name:""))); } });
+      S.tasks.forEach(function(k){ if(rows.length<40 && norm(k.title+" "+htmlToText(k.notes)+" "+(k.subs||[]).map(function(s){return s.text;}).join(" ")).indexOf(q)>=0){ var p=proj(k.projectId); rows.push(row("task",k.id,k.title,(k.day?niceDate(k.day):"someday")+(k.status==="done"?" · done":"")+(p?" · "+p.name:""))); } });
       S.people.forEach(function(p){ if(rows.length<40 && (norm(p.name)+" "+norm(p.company)+" "+norm(p.notes)).indexOf(q)>=0) rows.push(row("person",p.id,p.name,p.relationship||p.company||"")); });
       S.jobs.forEach(function(j){ if(rows.length<40 && (norm(j.company)+" "+norm(j.role)+" "+norm(j.notes)).indexOf(q)>=0) rows.push(row("job",j.id,j.company+(j.role?" — "+j.role:""),j.stage||"")); });
       S.projects.forEach(function(p){ if(rows.length<40 && (norm(p.name)+" "+norm(p.notes)).indexOf(q)>=0) rows.push(row("project",p.id,p.name,"")); });
@@ -2527,7 +2625,7 @@
       if(q.length>=2){
         S.tasks.forEach(function(k){
           if(res.length>=16||k.status==="done") return;
-          if(norm(k.title+" "+(k.notes||"")+" "+(k.subs||[]).map(function(s){return s.text;}).join(" ")).indexOf(q)>=0){
+          if(norm(k.title+" "+htmlToText(k.notes)+" "+(k.subs||[]).map(function(s){return s.text;}).join(" ")).indexOf(q)>=0){
             res.push({icon:"☐",label:k.title,hint:k.day?niceDate(k.day):"someday",run:function(){ openTaskModal({edit:k}); }});
           }
         });
@@ -2660,7 +2758,7 @@
   function exportCSV(){
     var head=["Title","Status","Day","Block","Time","Project","Profile","Important","Carried days","Created","Completed on","Subtasks","Notes"];
     var rows=S.tasks.map(function(k){ var p=proj(k.projectId); var pr=p&&p.profileId?profileById(p.profileId):null;
-      return [k.title,k.status,k.day||"someday",k.block||"",k.at||"",p?p.name:"",pr?pr.name:"",k.priority?"yes":"",k.rollover||0,k.created||"",k.completedOn||"",(k.subs||[]).map(function(s){return (s.done?"[x] ":"[ ] ")+s.text;}).join(" | "),k.notes||""].map(csvCell).join(",");
+      return [k.title,k.status,k.day||"someday",k.block||"",k.at||"",p?p.name:"",pr?pr.name:"",k.priority?"yes":"",k.rollover||0,k.created||"",k.completedOn||"",(k.subs||[]).map(function(s){return (s.done?"[x] ":"[ ] ")+s.text;}).join(" | "),htmlToText(k.notes)].map(csvCell).join(",");
     });
     var blob=new Blob(["﻿"+head.map(csvCell).join(",")+"\n"+rows.join("\n")],{type:"text/csv"});
     var a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="daybook-tasks-"+today()+".csv"; a.click();

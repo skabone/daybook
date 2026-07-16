@@ -10,7 +10,7 @@ A day planner that lives in **one HTML file**. No accounts, no backend, no build
 - **Week view** — the next seven days as lists; drag tasks between days or add straight into one.
 - **⌘K command palette & keyboard shortcuts** — every action, view, profile, and task from one fuzzy box; `g`+key navigation; `?` shows the cheat sheet.
 - **Natural-language capture with autocomplete** — type `Call the bank tomorrow @errands @3pm` and it lands on the right day, block, time, and project; `@` opens suggestions in every input.
-- **Subtasks, notes & nesting** — checklists with progress pills, free-text notes, drag a task onto another to nest it.
+- **Subtasks, rich notes & nesting** — checklists with progress pills, formatted notes (bold/italic/underline, bullet & numbered lists) on daily notes, projects, people, jobs, and tasks; drag a task onto another to nest it.
 - **Bulk edit** — select many tasks and complete / move / retag / delete them at once.
 - **Drag & drop everywhere** — reorder lists, or drop a task on the dock to move it to a block, date, Someday, or another project.
 - **Profiles & filters** — Outlook-style contexts (All / Favorites / Work / School…) plus multi-select project filters, scoped across every view.
