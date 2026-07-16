@@ -457,7 +457,7 @@
   var S = load();
   var bootSavedAt = S.savedAt||0;
   function normalize(d){ d.projects=d.projects||[]; d.tasks=d.tasks||[]; d.templates=d.templates||[]; d.habits=d.habits||[]; d.habitLog=d.habitLog||{}; d.events=d.events||[]; d.phases=d.phases||[]; d.dismissed=d.dismissed||[]; d.notes=d.notes||{}; d.calSources=d.calSources||[]; if(!d.proxy)d.proxy=PROXY_DEFAULT; d.emails=d.emails||[]; d.jobs=d.jobs||[]; d.improve=d.improve||[]; if(!d.calView)d.calView="month"; if(!d.calAnchor)d.calAnchor=(d.calMonth?d.calMonth+"-01":null); if(!d.skin)d.skin="paper"; delete d.apiKey; d.people=d.people||[]; d.collapsed=d.collapsed||{}; d.lastExport=d.lastExport||null; if(typeof d.name!=="string")d.name="";
-    d.focus=d.focus||{}; Object.keys(d.focus).forEach(function(k){ var v=d.focus[k]; if(typeof v==="string"){ d.focus[k]=v?[{id:uid(),text:v,done:false}]:[]; } });
+    d.focus=d.focus||{}; Object.keys(d.focus).forEach(function(k){ var v=d.focus[k]; if(typeof v==="string"){ d.focus[k]=v?[{id:uid(),text:v,done:false}]:[]; } (d.focus[k]||[]).forEach(function(f){ if(!Array.isArray(f.subs)) f.subs=[]; }); });
     if(!d.tlView)d.tlView="months"; if(typeof d.panelOpen!=="boolean")d.panelOpen=true;
     d.tasks.forEach(function(k){ if(!Array.isArray(k.subs)) k.subs=[]; });
     return mergeSpuCoursePlan(d); }
@@ -613,11 +613,27 @@
   }
   function focusRow(f){
     var p=f.projectId?proj(f.projectId):null;
+    var pills=(p?'<span class="pill proj" style="background:'+p.color+'">'+esc(p.name)+'</span>':"");
+    var subRows="";
+    if(f.subs&&f.subs.length){
+      var sdn=f.subs.filter(function(s){return s.done;}).length;
+      pills+='<span class="pill subs-n">☑ '+sdn+'/'+f.subs.length+'</span>';
+      subRows=f.subs.map(function(s){return '<li class="sub '+(s.done?"done":"")+'"><button class="chk '+(s.done?"done":"")+'" data-act="fsub-toggle" data-sid="'+s.id+'" aria-label="Toggle subitem" aria-pressed="'+!!s.done+'"></button><span class="sub-t">'+esc(s.text)+'</span></li>';}).join("");
+    }
+    if(pendingSubAdd===f.id) subRows+='<li class="sub"><span class="inline-plus" style="width:15px;font-size:13px">⤷</span><input class="inline-add" data-fsubfor="'+f.id+'" placeholder="Add a subitem… (Esc to close)" aria-label="Add a subitem"/></li>';
+    var subsHtml=subRows?'<ul class="subs">'+subRows+'</ul>':'';
     return '<li class="task '+(f.done?"done":"")+'" data-id="'+f.id+'">'+
       '<button class="chk '+(f.done?"done":"")+'" data-act="focus-toggle" aria-label="Toggle done" aria-pressed="'+!!f.done+'"></button>'+
       '<div class="task-main" data-act="focus-edit" title="Tap to edit"><div class="task-title">'+esc(f.text)+'</div>'+
-      (p?'<div class="task-meta"><span class="pill proj" style="background:'+p.color+'">'+esc(p.name)+'</span></div>':"")+'</div>'+
+      (pills?'<div class="task-meta">'+pills+'</div>':"")+subsHtml+'</div>'+
+      '<button class="task-addsub" data-act="fsub-add" aria-label="Add a subitem" title="Add a subitem">⤷+</button>'+
       '<button class="task-x" data-act="focus-del" aria-label="Delete">✕</button></li>';
+  }
+  function addFocusSubInline(fid,val){
+    val=(val||"").trim(); if(!val) return;
+    var f=(S.focus[viewDay]||[]).find(function(x){return x.id===fid;}); if(!f) return;
+    f.subs=f.subs||[]; f.subs.push({id:uid(),text:val,done:false});
+    pendingSubAdd=fid; save(); render();
   }
   function addFocusItem(val){
     val=(val||"").trim(); if(!val) return;
@@ -983,11 +999,12 @@
     bindCapture();
     if(view==="hub") bindHub();
     v.onkeydown=function(e){
-      if(e.key==="Escape" && e.target.dataset && e.target.dataset.subfor){ pendingSubAdd=null; render(); return; }
+      if(e.key==="Escape" && e.target.dataset && (e.target.dataset.subfor||e.target.dataset.fsubfor)){ pendingSubAdd=null; render(); return; }
       if(e.key==="Enter" && e.target.classList && e.target.classList.contains("inline-add")){ e.preventDefault();
       if(e.target.dataset.subfor){ addSubInline(e.target.dataset.subfor, e.target.value); }
+      else if(e.target.dataset.fsubfor){ addFocusSubInline(e.target.dataset.fsubfor, e.target.value); }
       else if(e.target.dataset.focus){ addFocusItem(e.target.value); } else { addTaskInline(e.target.value, e.target.dataset.block); } } };
-    if(pendingSubAdd){ var psi=v.querySelector('.inline-add[data-subfor="'+pendingSubAdd+'"]');
+    if(pendingSubAdd){ var psi=v.querySelector('.inline-add[data-subfor="'+pendingSubAdd+'"],.inline-add[data-fsubfor="'+pendingSubAdd+'"]');
       if(psi){ psi.focus(); psi.onblur=function(){ if(!psi.value.trim()&&pendingSubAdd){ pendingSubAdd=null; render(); } }; } }
     if(pendingFocus){ var pf=pendingFocus==="focus" ? v.querySelector('.inline-add[data-focus="1"]') : v.querySelector('.inline-add[data-block="'+pendingFocus+'"]'); pendingFocus=null; if(pf){ pf.focus(); } }
     v.querySelectorAll("details.fold").forEach(function(d){ d.addEventListener("toggle",function(){ S.collapsed[d.dataset.fold]=!d.open; save(); }); });
@@ -1055,6 +1072,8 @@
       else if(act==="focus-edit"){ var fitem=(S.focus[viewDay]||[]).find(function(x){return x.id===anyId;}); if(fitem) openFocusEditModal(fitem); }
       else if(act==="sub-toggle"){ var pk=S.tasks.find(function(x){return x.id===(id||anyId);}); if(pk){ var sb=(pk.subs||[]).find(function(x){return x.id===a.dataset.sid;}); if(sb){ sb.done=!sb.done; save(); render(); } } }
       else if(act==="sub-add"){ pendingSubAdd=(id||anyId); render(); }
+      else if(act==="fsub-add"){ pendingSubAdd=(id||anyId); render(); }
+      else if(act==="fsub-toggle"){ var ff=(S.focus[viewDay]||[]).find(function(x){return x.id===(id||anyId);}); if(ff){ var fsb=(ff.subs||[]).find(function(x){return x.id===a.dataset.sid;}); if(fsb){ fsb.done=!fsb.done; save(); render(); } } }
       else if(act==="daynav"){ var dd0=+a.dataset.d; viewDay = dd0===0?today():addDays(viewDay,dd0); render(); }
       else if(act==="panel-toggle"){ S.panelOpen=!S.panelOpen; save(); render(); }
       else if(act==="panel-goday"){ viewDay=a.dataset.d; render(); window.scrollTo({top:0,behavior:"smooth"}); }
@@ -1264,9 +1283,23 @@
   }
   function openFocusEditModal(f){
     modal('<h3>Edit focus</h3><div class="fld"><label>Focus item</label><input id="fe-t" value="'+esc(f.text)+'"/></div>'+
+      '<div class="fld"><label>Subitems</label><div id="fe-subs"></div><input id="fe-sub-new" placeholder="Add a subitem — press Enter"/></div>'+
       '<div class="modal-actions"><button class="btn ghost" data-x>Cancel</button><button class="btn primary" id="m-save">Save</button></div>');
     document.querySelector("[data-x]").onclick=close;
-    var go=function(){ var nv=document.getElementById("fe-t").value.trim(); if(!nv){ toast("Write something"); return; } f.text=nv; save(); close(); render(); };
+    var subs=(f.subs||[]).map(function(s){return {id:s.id,text:s.text,done:!!s.done};});
+    var fs=document.getElementById("fe-subs"), fsn=document.getElementById("fe-sub-new");
+    function renderFSubs(){
+      fs.innerHTML=subs.map(function(s,i){return '<div class="msub"><button type="button" class="chk '+(s.done?"done":"")+'" data-si="'+i+'" aria-label="Toggle subitem" aria-pressed="'+!!s.done+'"></button><input value="'+esc(s.text)+'" data-st="'+i+'"/><button type="button" class="task-x" style="opacity:1" data-sx="'+i+'" aria-label="Remove subitem">✕</button></div>';}).join("");
+    }
+    renderFSubs();
+    fs.onclick=function(e){ var b=e.target.closest("[data-si],[data-sx]"); if(!b)return;
+      if(b.dataset.sx!==undefined){ subs.splice(+b.dataset.sx,1); renderFSubs(); }
+      else { var sbb=subs[+b.dataset.si]; sbb.done=!sbb.done; renderFSubs(); } };
+    fs.oninput=function(e){ var si=e.target.dataset.st; if(si!==undefined) subs[+si].text=e.target.value; };
+    fsn.addEventListener("keydown",function(e){ if(e.key==="Enter"){ e.preventDefault(); var sv=fsn.value.trim(); if(sv){ subs.push({id:uid(),text:sv,done:false}); fsn.value=""; renderFSubs(); } } });
+    var go=function(){ var nv=document.getElementById("fe-t").value.trim(); if(!nv){ toast("Write something"); return; }
+      if(fsn.value.trim()) subs.push({id:uid(),text:fsn.value.trim(),done:false});
+      f.text=nv; f.subs=subs.filter(function(s){return (s.text||"").trim();}); save(); close(); render(); };
     document.getElementById("m-save").onclick=go;
     document.getElementById("fe-t").addEventListener("keydown",function(e){ if(e.key==="Enter"){ e.preventDefault(); go(); } });
   }
@@ -1551,7 +1584,7 @@
     body+='<div class="fld"><label>Events &amp; milestones</label><ul class="tasks">'+
       (evs.length?evs.map(function(e){return '<li class="task" data-id="'+e.id+'"><span class="dot" style="background:'+(e.color||projColor(e.projectId))+';border-color:transparent;cursor:default"></span><div class="task-main"'+(e.sourceId?' style="cursor:default"':' data-dact="editev" title="Tap to edit"')+'><div class="task-title">'+esc(e.title)+'</div>'+(e.sourceId?'<div class="task-meta"><span class="pill block">subscribed</span></div>':"")+'</div>'+(e.sourceId?"":'<button class="task-x" data-dact="delev" style="opacity:1" aria-label="delete">✕</button>')+'</li>';}).join(""):'<div class="empty">No events</div>')+'</ul></div>';
     var fitems=S.focus[ds]||[];
-    if(fitems.length) body+='<div class="fld"><label>Focus that day</label><ul class="tasks">'+fitems.map(function(f){return '<li class="task '+(f.done?"done":"")+'"><span class="dot '+(f.done?"on":"")+'" style="cursor:default"></span><div class="task-main" style="cursor:default"><div class="task-title">'+esc(f.text)+'</div></div></li>';}).join("")+'</ul></div>';
+    if(fitems.length) body+='<div class="fld"><label>Focus that day</label><ul class="tasks">'+fitems.map(function(f){return '<li class="task '+(f.done?"done":"")+'"><span class="dot '+(f.done?"on":"")+'" style="cursor:default"></span><div class="task-main" style="cursor:default"><div class="task-title">'+esc(f.text)+'</div>'+(f.subs&&f.subs.length?'<div class="task-meta"><span class="pill subs-n">☑ '+f.subs.filter(function(s){return s.done;}).length+'/'+f.subs.length+'</span></div>':"")+'</div></li>';}).join("")+'</ul></div>';
     body+='<div class="fld"><label>Notes</label><textarea id="d-note" class="proj-notes" style="min-height:64px" placeholder="Nothing written this day — add a note…">'+esc(S.notes[ds]||"")+'</textarea></div>';
     body+='<div class="modal-actions"><button class="btn ghost" data-x>Close</button><button class="btn" id="d-addev">+ Event</button><button class="btn primary" id="d-addtask">+ Task</button></div>';
     modal(body);
@@ -2105,7 +2138,7 @@
     acClose();
   }
   function acUpdate(t){
-    if(t.dataset&&t.dataset.subfor){ acClose(); return; }
+    if(t.dataset&&(t.dataset.subfor||t.dataset.fsubfor)){ acClose(); return; }
     var caret=t.selectionStart||0;
     var m=t.value.slice(0,caret).match(/@([\w:&/-]*)$/);
     if(!m){ acClose(); return; }
