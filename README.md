@@ -6,19 +6,26 @@ A day planner that lives in **one HTML file**. No accounts, no backend, no build
 
 ## Features
 
-- **Today view** — a focused daily page: top priorities, a master task list, Morning / Afternoon / Evening blocks, an Anytime list, Someday parking lot, habits, and daily notes. Every section is collapsible.
-- **Natural-language capture** — type `Call the bank tomorrow @errands @morning` and it lands on the right day, block, and project. `@project` and `@time` tags work in every input.
-- **Subtasks** — break any task into a checklist with progress shown at a glance.
-- **Drag & drop everywhere** — reorder lists, or drag a task onto the drop dock to move it to a time block, another date, Someday, or a different project.
-- **Day-by-day history** — flip back through any previous day to see what was completed, plus a running completed log and a carried-over panel for anything that slipped.
+- **Today view** — a focused daily page: top priorities, a master task list, Morning / Afternoon / Evening blocks, an Anytime list, Someday parking lot, habits, and daily notes. Every section is collapsible with its own progress bar.
+- **Week view** — the next seven days as lists; drag tasks between days or add straight into one.
+- **⌘K command palette & keyboard shortcuts** — every action, view, profile, and task from one fuzzy box; `g`+key navigation; `?` shows the cheat sheet.
+- **Natural-language capture with autocomplete** — type `Call the bank tomorrow @errands @3pm` and it lands on the right day, block, time, and project; `@` opens suggestions in every input.
+- **Subtasks, notes & nesting** — checklists with progress pills, free-text notes, drag a task onto another to nest it.
+- **Bulk edit** — select many tasks and complete / move / retag / delete them at once.
+- **Drag & drop everywhere** — reorder lists, or drop a task on the dock to move it to a block, date, Someday, or another project.
+- **Profiles & filters** — Outlook-style contexts (All / Favorites / Work / School…) plus multi-select project filters, scoped across every view.
+- **Day-by-day history** — flip back through any day, with a completed log and a carried-over panel for anything that slipped.
 - **Task rollover** — unfinished tasks follow you to today automatically, marked with how long they've been carried.
+- **Weekly review** — a guided two-minute ritual: celebrate wins, clear carried tasks, pick what's next.
+- **Insights** — 14-day completion chart, streaks, power block, and per-project progress. All computed locally.
+- **Reminders & focus timer** — browser notifications at each task's clock time (while open) and a built-in 25-minute focus timer.
 - **Projects, milestones & phases** — kanban-style project cards, a color-coded calendar (month / week / work-week / 3-day / year), and a zoomable timeline (months / weeks / days).
 - **Recurring tasks** — daily, weekly by weekday, or every N days.
 - **People / follow-ups** — lightweight CRM for staying in touch on a cadence.
 - **Habits & streaks** — daily habit dots with streak tracking.
-- **Smart suggestions** — local, explainable nudges from your own patterns (aged tasks, quiet projects, weekday routines). No AI calls, nothing sent anywhere.
-- **Calendar import** — subscribe to iCal/webcal feeds or import `.ics` files.
-- **Light/dark themes** with several color skins and a print-friendly layout.
+- **Smart suggestions** — local, explainable nudges from your own patterns. No AI calls, nothing sent anywhere.
+- **Calendar import & export** — subscribe to iCal/webcal feeds, import `.ics`, export your plan as `.ics` or CSV.
+- **Light/dark themes** with several color skins, a print-friendly layout, and an archive to stay fast over the years.
 
 ## Where your data lives
 
