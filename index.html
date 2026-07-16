@@ -55,14 +55,39 @@
   button { font-family: inherit; }
   ::selection { background: var(--terra-bg); }
 
-  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px 120px; }
+  .wrap { max-width: 1360px; margin: 0 auto; padding: 0 16px 120px; }
+
+  /* navigation sidebar */
+  .layout{ display:flex; gap:18px; align-items:flex-start; }
+  #sidebar{ flex:0 0 212px; min-width:0; position:sticky; top:74px; max-height:calc(100vh - 92px); overflow:auto; display:flex; flex-direction:column; gap:14px; }
+  #view{ flex:1 1 auto; min-width:0; }
+  .sb-card{ background:var(--card); border:1.5px solid var(--line); border-radius:14px; padding:10px; }
+  .sb-h{ font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-soft); font-weight:700; margin:2px 6px 8px; display:flex; align-items:center; }
+  .sb-h .sb-act{ margin-left:auto; background:none; border:none; color:var(--terra-deep); cursor:pointer; font-size:11.5px; font-weight:700; padding:0 2px; font-family:inherit; }
+  .sb-row{ display:flex; align-items:center; gap:8px; width:100%; text-align:left; background:none; border:none; font-family:inherit; font-size:13.5px; color:var(--ink); padding:7px 8px; border-radius:9px; cursor:pointer; }
+  .sb-row:hover{ background:var(--line-soft); }
+  .sb-row[aria-pressed="true"], .sb-row.on{ background:var(--terra-bg); color:var(--terra-deep); font-weight:700; }
+  .sb-row .pdot{ width:10px; height:10px; border-radius:50%; flex:none; }
+  .sb-row .sb-name{ flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sb-row .cnt{ margin-left:auto; font-size:11px; color:var(--ink-faint); flex:none; }
+  .sb-star{ background:none; border:none; cursor:pointer; color:var(--ink-faint); font-size:13px; padding:0 2px; flex:none; }
+  .sb-star.on{ color:var(--warn); }
+  .sb-mini{ font-size:11px; color:var(--ink-faint); padding:4px 8px 2px; line-height:1.45; }
+  #sb-burger{ display:none; }
+  #sb-scrim{ display:none; }
+  @media (max-width:1000px){
+    #sb-burger{ display:inline-flex; }
+    #sidebar{ display:none; }
+    body.sb-open #sidebar{ display:flex; position:fixed; left:0; top:0; bottom:0; z-index:56; width:266px; max-height:none; background:var(--sheet); padding:16px 12px; border-radius:0 18px 18px 0; box-shadow:0 0 60px rgba(0,0,0,.35); overflow:auto; }
+    body.sb-open #sb-scrim{ display:block; position:fixed; inset:0; z-index:55; background:rgba(20,18,24,.4); }
+  }
 
   /* top bar */
   .appbar {
     position: sticky; top: 0; z-index: 30; background: var(--slate);
     border-radius: 0 0 18px 18px; box-shadow: 0 4px 20px -8px var(--shadow);
   }
-  .appbar-inner { max-width:1120px; margin:0 auto; padding: 14px 18px 16px; display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  .appbar-inner { max-width:1360px; margin:0 auto; padding: 14px 18px 16px; display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
   .brand { color: var(--slate-ink); font-weight: 800; letter-spacing:.12em; text-transform:uppercase; font-size:15px; white-space:nowrap; }
   .brand small { display:block; font-size:10.5px; letter-spacing:.18em; opacity:.7; font-weight:600; }
   .appbar .spacer { flex:1; }
@@ -408,6 +433,7 @@
 
 <div class="appbar">
   <div class="appbar-inner">
+    <button class="icon-btn" id="sb-burger" title="Menu" aria-label="Open navigation">☰</button>
     <div class="brand">Pencil Me In<small>daybook</small></div>
     <nav class="nav" id="nav" aria-label="Views">
       <button data-view="hub">Hub</button>
@@ -432,9 +458,13 @@
     <button class="add" id="q-add">Add</button>
     <button class="add" id="q-more" style="background:var(--slate);border-color:var(--slate);" title="More options">⋯</button>
   </div>
-  <main id="view"></main>
+  <div class="layout">
+    <aside id="sidebar" aria-label="Navigation and filters"></aside>
+    <main id="view"></main>
+  </div>
 </div>
 
+<div id="sb-scrim"></div>
 <div id="modal-root"></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
@@ -460,15 +490,19 @@
     d.focus=d.focus||{}; Object.keys(d.focus).forEach(function(k){ var v=d.focus[k]; if(typeof v==="string"){ d.focus[k]=v?[{id:uid(),text:v,done:false}]:[]; } (d.focus[k]||[]).forEach(function(f){ if(!Array.isArray(f.subs)) f.subs=[]; }); });
     if(!d.tlView)d.tlView="months"; if(typeof d.panelOpen!=="boolean")d.panelOpen=true;
     d.tasks.forEach(function(k){ if(!Array.isArray(k.subs)) k.subs=[]; });
+    d.profiles=d.profiles||[]; if(!d.activeProfile)d.activeProfile="all"; d.filterProjects=d.filterProjects||[];
+    d.projects.forEach(function(p){ if(p.profileId===undefined)p.profileId=null; p.fav=!!p.fav; });
     return mergeSpuCoursePlan(d); }
   function load(){ try{ var d=JSON.parse(localStorage.getItem(KEY)); if(d&&d.version) return normalize(d); }catch(e){ try{ var raw=localStorage.getItem(KEY); if(raw) localStorage.setItem(KEY+"-corrupt",raw); }catch(e2){} } return seed(); }
   function save(){ S.savedAt=Date.now(); try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){ toast("Storage full — export a backup"); } scheduleSync(); scheduleGh(); }
   function seed(){
+    var prHome={id:uid(),name:"Home",emoji:"🏠"}, prWork={id:uid(),name:"Work",emoji:"💼"};
     return mergeSpuCoursePlan({
       version:1, lastOpen:null, theme:null,
+      profiles:[prHome,prWork], activeProfile:"all", filterProjects:[],
       projects:[
-        {id:uid(),name:"Personal",color:"var(--p0)",notes:""},
-        {id:uid(),name:"Work",color:"var(--p1)",notes:""}
+        {id:uid(),name:"Personal",color:"var(--p0)",notes:"",profileId:prHome.id,fav:false},
+        {id:uid(),name:"Work",color:"var(--p1)",notes:"",profileId:prWork.id,fav:false}
       ],
       tasks:[], templates:[], focus:{}, notes:{}, habits:[
         {id:uid(),name:"Water",goal:8},{id:uid(),name:"Fresh air",goal:1},{id:uid(),name:"Move",goal:1}
@@ -571,9 +605,81 @@
     else if(view==="timeline") m.innerHTML=viewTimeline();
     else if(view==="hub") m.innerHTML=viewHub();
     else if(view==="people") m.innerHTML=viewPeople();
+    renderSidebar();
     bind();
     if(lastRenderedView!==view){ m.classList.remove("anim"); void m.offsetWidth; m.classList.add("anim"); lastRenderedView=view; }
   }
+
+  /* ---------- profiles & project filters (sidebar scope) ---------- */
+  function profileById(id){ return S.profiles.find(function(x){return x.id===id;}); }
+  function scopeProjIds(){
+    var ids=null;
+    if(S.activeProfile==="fav") ids=S.projects.filter(function(p){return p.fav;}).map(function(p){return p.id;});
+    else if(S.activeProfile&&S.activeProfile!=="all"){
+      if(!profileById(S.activeProfile)){ S.activeProfile="all"; }
+      else ids=S.projects.filter(function(p){return p.profileId===S.activeProfile;}).map(function(p){return p.id;});
+    }
+    if(S.filterProjects.length){
+      var f=S.filterProjects.filter(function(id){return proj(id);});
+      ids = ids ? ids.filter(function(id){return f.indexOf(id)>=0;}) : f;
+    }
+    return ids;
+  }
+  function scopeActive(){ return scopeProjIds()!==null; }
+  function inScope(pid){ var ids=scopeProjIds(); if(!ids) return true; return pid?ids.indexOf(pid)>=0:false; }
+  function scopeLabel(){
+    var bits=[];
+    if(S.activeProfile==="fav") bits.push("⭐ Favorites");
+    else if(S.activeProfile!=="all"){ var pr=profileById(S.activeProfile); if(pr) bits.push((pr.emoji?pr.emoji+" ":"")+pr.name); }
+    if(S.filterProjects.length) bits.push(S.filterProjects.length+" project"+(S.filterProjects.length===1?"":"s"));
+    return bits.join(" · ");
+  }
+  function syncNav(){ [].forEach.call(nav.children,function(c){ c.setAttribute("aria-current",c.dataset.view===view?"true":"false"); }); }
+  function renderSidebar(){
+    var sb=document.getElementById("sidebar"); if(!sb) return;
+    var openCnt=function(pid){ return S.tasks.filter(function(k){return k.projectId===pid&&k.status==="todo";}).length; };
+    var profCnt=function(prid){ return S.projects.filter(function(p){return p.profileId===prid;}).reduce(function(n,p){return n+openCnt(p.id);},0); };
+    var todayOpen=S.tasks.filter(function(k){return k.day===today()&&k.status!=="done"&&inScope(k.projectId);}).length;
+    var VIEWS=[["today","📅","Today"],["hub","✨","Hub"],["projects","🗂","Projects"],["people","👥","People"],["calendar","🗓","Calendar"],["timeline","📈","Timeline"]];
+    var h='<div class="sb-card"><div class="sb-h">Views</div>'+VIEWS.map(function(v){
+      return '<button class="sb-row" data-sb="view" data-v="'+v[0]+'" aria-pressed="'+(view===v[0])+'">'+v[1]+'<span class="sb-name">'+v[2]+'</span>'+(v[0]==="today"&&todayOpen?'<span class="cnt">'+todayOpen+'</span>':"")+'</button>';
+    }).join("")+'</div>';
+    var favCnt=S.projects.filter(function(p){return p.fav;}).length;
+    h+='<div class="sb-card"><div class="sb-h">Profiles<button class="sb-act" data-sb="newprofile">+ new</button></div>';
+    h+='<button class="sb-row" data-sb="profile" data-id="all" aria-pressed="'+(S.activeProfile==="all")+'">🌐<span class="sb-name">All</span></button>';
+    h+='<button class="sb-row" data-sb="profile" data-id="fav" aria-pressed="'+(S.activeProfile==="fav")+'">⭐<span class="sb-name">Favorites</span>'+(favCnt?'<span class="cnt">'+favCnt+'</span>':"")+'</button>';
+    S.profiles.forEach(function(pr){
+      h+='<div class="sb-row" role="button" tabindex="0" data-sb="profile" data-id="'+pr.id+'" aria-pressed="'+(S.activeProfile===pr.id)+'">'+esc(pr.emoji||"👤")+'<span class="sb-name">'+esc(pr.name)+'</span><span class="cnt">'+profCnt(pr.id)+'</span><button class="sb-star" data-sb="editprofile" data-id="'+pr.id+'" title="Edit profile" aria-label="Edit profile">✎</button></div>';
+    });
+    h+='</div>';
+    var ids=null;
+    if(S.activeProfile==="fav") ids=S.projects.filter(function(p){return p.fav;}).map(function(p){return p.id;});
+    else if(S.activeProfile!=="all") ids=S.projects.filter(function(p){return p.profileId===S.activeProfile;}).map(function(p){return p.id;});
+    var plist=S.projects.filter(function(p){ return !ids||ids.indexOf(p.id)>=0; });
+    h+='<div class="sb-card"><div class="sb-h">Projects'+(S.filterProjects.length?'<button class="sb-act" data-sb="clearfilter">✕ clear filter</button>':'')+'</div>';
+    if(plist.length){
+      plist.forEach(function(p){
+        var on=S.filterProjects.indexOf(p.id)>=0;
+        h+='<div class="sb-row'+(on?' on':'')+'" role="button" tabindex="0" data-sb="projfilter" data-id="'+p.id+'"><span class="pdot" style="background:'+p.color+'"></span><span class="sb-name">'+esc(p.name)+'</span><span class="cnt">'+openCnt(p.id)+'</span><button class="sb-star'+(p.fav?" on":"")+'" data-sb="fav" data-id="'+p.id+'" title="Favorite" aria-label="Toggle favorite" aria-pressed="'+!!p.fav+'">'+(p.fav?"★":"☆")+'</button></div>';
+      });
+      h+='<div class="sb-mini">Click a project to filter — pick several. ★ pins it to Favorites.</div>';
+    } else h+='<div class="sb-mini">No projects in this profile yet — edit a project (or the profile) to add some.</div>';
+    h+='</div>';
+    sb.innerHTML=h;
+  }
+  document.getElementById("sidebar").onclick=function(e){
+    var a=e.target.closest("[data-sb]"); if(!a) return;
+    var t=a.dataset.sb;
+    if(t==="view"){ view=a.dataset.v; syncNav(); document.body.classList.remove("sb-open"); render(); }
+    else if(t==="profile"){ S.activeProfile=a.dataset.id; S.filterProjects=[]; save(); render(); }
+    else if(t==="fav"){ var p=proj(a.dataset.id); if(p){ p.fav=!p.fav; save(); render(); } }
+    else if(t==="projfilter"){ var fid=a.dataset.id; var fi=S.filterProjects.indexOf(fid); if(fi<0) S.filterProjects.push(fid); else S.filterProjects.splice(fi,1); save(); render(); }
+    else if(t==="clearfilter"){ S.filterProjects=[]; save(); render(); }
+    else if(t==="newprofile"){ openProfileModal(); }
+    else if(t==="editprofile"){ openProfileModal(profileById(a.dataset.id)); }
+  };
+  document.getElementById("sb-burger").onclick=function(){ document.body.classList.toggle("sb-open"); };
+  document.getElementById("sb-scrim").onclick=function(){ document.body.classList.remove("sb-open"); };
 
   /* ---------- TODAY ---------- */
   function impFirst(arr){ return arr.slice().sort(function(a,b){ return (b.priority?1:0)-(a.priority?1:0); }); }
@@ -645,9 +751,9 @@
   function viewToday(){
     var t=today(), vd=viewDay;
     var isToday=vd===t, isPast=vd<t;
-    var focusItems=S.focus[vd]||[];
-    var open=S.tasks.filter(function(k){return k.day===vd && k.status!=="done";});
-    var doneV=S.tasks.filter(function(k){return k.status==="done" && k.completedOn===vd;});
+    var focusItems=(S.focus[vd]||[]).filter(function(f){return !f.projectId||inScope(f.projectId);});
+    var open=S.tasks.filter(function(k){return k.day===vd && k.status!=="done" && inScope(k.projectId);});
+    var doneV=S.tasks.filter(function(k){return k.status==="done" && k.completedOn===vd && inScope(k.projectId);});
     var blocks=["morning","afternoon","evening"];
     var sugg=isToday?computeSuggestions():[];
     var doneCount=doneV.length, total=open.length+doneCount;
@@ -667,6 +773,7 @@
       (isToday?'':'<button class="chip" data-act="daynav" data-d="0">Back to today</button>')+
       (isToday?'<div class="clock" id="clock">'+clockHtml()+'</div>':'')+
       (isToday&&streak>=2?'<span class="streak-pill" title="Days in a row with at least one task done">🔥 '+streak+'-day streak</span>':"")+
+      (scopeActive()?'<button class="chip" data-act="clearscope" title="Showing a filtered slice — tap to show everything" style="background:var(--warn-bg);border-color:var(--warn-bg);color:var(--warn)">🔍 '+esc(scopeLabel())+' ✕</button>':'')+
       '<button class="chip" style="margin-left:auto" data-act="panel-toggle" aria-pressed="'+!!S.panelOpen+'">📋 '+(S.panelOpen?"Hide":"Show")+' log'+(doneCount?' · '+doneCount+' done':'')+'</button>'+
       '</div>'+
       '<p class="sub"'+(total?' style="margin-bottom:0"':'')+'>'+status+'</p>'+
@@ -702,7 +809,7 @@
     html+='</div>';
     var anytime=sortDay(open.filter(function(k){return !k.block;}));
     html+=fold("anytime","⏳ Anytime"+(anytime.length?" · "+anytime.length:""),'<ul class="tasks" data-list="loose">'+anytime.map(taskLi).join("")+inlineAddRow("loose","Add for anytime — no set time…")+'</ul>');
-    var someday=S.tasks.filter(function(k){return !k.day && k.status!=="done";});
+    var someday=S.tasks.filter(function(k){return !k.day && k.status!=="done" && inScope(k.projectId);});
     html+=fold("someday","💭 Someday",'<ul class="tasks" data-list="someday">'+someday.map(taskLi).join("")+inlineAddRow("someday","Add for later — no date…")+'</ul>');
     var hb='';
     S.habits.forEach(function(h){
@@ -726,8 +833,8 @@
 
   /* completed + carried log — the hideable side panel */
   function sidePanelHtml(vd){
-    var carried=S.tasks.filter(function(k){return k.status==="todo" && (k.rollover||0)>=1;});
-    var doneV=S.tasks.filter(function(k){return k.status==="done" && k.completedOn===vd;});
+    var carried=S.tasks.filter(function(k){return k.status==="todo" && (k.rollover||0)>=1 && inScope(k.projectId);});
+    var doneV=S.tasks.filter(function(k){return k.status==="done" && k.completedOn===vd && inScope(k.projectId);});
     var MOVES=[["morning","☀️ Morning"],["afternoon","🌤 Afternoon"],["evening","🌙 Evening"],["anytime","⏳ Anytime"],["someday","💭 Someday"]];
     var cb=carried.length?carried.map(function(k){
       var p=proj(k.projectId);
@@ -737,7 +844,7 @@
     }).join(""):'<div class="empty">Nothing carried over 🎉</div>';
     var db=doneV.length?'<ul class="tasks">'+doneV.map(taskLi).join("")+'</ul>':'<div class="empty">Nothing completed '+(vd===today()?"yet":"this day")+'</div>';
     var byDay={};
-    S.tasks.forEach(function(k){ if(k.status==="done"&&k.completedOn){ (byDay[k.completedOn]=byDay[k.completedOn]||[]).push(k); } });
+    S.tasks.forEach(function(k){ if(k.status==="done"&&k.completedOn&&inScope(k.projectId)){ (byDay[k.completedOn]=byDay[k.completedOn]||[]).push(k); } });
     var daysK=Object.keys(byDay).sort().reverse().slice(0,21);
     var lb=daysK.length?daysK.map(function(d){
       return '<div class="log-day" data-act="panel-goday" data-d="'+d+'" title="View this day">'+niceDate(d)+' · '+byDay[d].length+'</div>'+
@@ -809,10 +916,10 @@
 
   /* ---------- PROJECTS ---------- */
   function viewProjects(){
-    var html='<h2 class="view-h">Projects</h2><p class="sub">Every task across every day, grouped by project.</p>';
+    var html='<h2 class="view-h">Projects</h2><p class="sub">Every task across every day, grouped by project.'+(scopeActive()?' <b>Filtered:</b> '+esc(scopeLabel())+' — <button class="chip" data-act="clearscope" style="padding:2px 9px">show all</button>':'')+'</p>';
     html+='<button class="btn primary" data-act="newproj" style="margin-bottom:16px">+ New project</button>';
     html+='<div class="board">';
-    S.projects.forEach(function(p){
+    S.projects.filter(function(p){return inScope(p.id);}).forEach(function(p){
       var ts=S.tasks.filter(function(k){return k.projectId===p.id;});
       var done=ts.filter(function(k){return k.status==="done";}).length;
       var open=ts.length-done; var pct=ts.length?Math.round(done/ts.length*100):0;
@@ -854,8 +961,8 @@
   function calAnchorDate(){ return S.calAnchor||today(); }
   function dayItems(ds){
     var items=[];
-    S.tasks.forEach(function(k){ if(k.day===ds) items.push({t:k.title,c:projColor(k.projectId),done:k.status==="done",imp:!!k.priority}); });
-    S.events.forEach(function(ev){ if(ev.date!==ds||!sourceEnabled(ev)) return; var c=ev.color||(ev.projectId?projColor(ev.projectId):null); items.push({t:ev.title,c:c,evt:!c}); });
+    S.tasks.forEach(function(k){ if(k.day===ds&&inScope(k.projectId)) items.push({t:k.title,c:projColor(k.projectId),done:k.status==="done",imp:!!k.priority}); });
+    S.events.forEach(function(ev){ if(ev.date!==ds||!sourceEnabled(ev)) return; if(ev.projectId&&!inScope(ev.projectId)) return; var c=ev.color||(ev.projectId?projColor(ev.projectId):null); items.push({t:ev.title,c:c,evt:!c}); });
     return items;
   }
   function spanDays(cv,a){
@@ -874,7 +981,7 @@
   }
   function viewCalendar(){
     var cv=S.calView||"month"; var a=calAnchorDate();
-    var html='<h2 class="view-h">Calendar</h2><p class="sub">Deadlines, milestones, and imported events — color-coded by project.</p>';
+    var html='<h2 class="view-h">Calendar</h2><p class="sub">Deadlines, milestones, and imported events — color-coded by project.'+(scopeActive()?' <b>Filtered:</b> '+esc(scopeLabel())+' — <button class="chip" data-act="clearscope" style="padding:2px 9px">show all</button>':'')+'</p>';
     html+='<div class="cal-head"><button class="icon-btn" style="background:var(--slate)" data-act="cal" data-d="-1" aria-label="Back">‹</button>'+
       '<h3>'+calTitle(cv,a)+'</h3>'+
       '<button class="icon-btn" style="background:var(--slate)" data-act="cal" data-d="1" aria-label="Forward">›</button>'+
@@ -920,8 +1027,8 @@
   }
   function yearGridHtml(y){
     var busy={};
-    S.tasks.forEach(function(k){ if(k.day&&k.day.slice(0,4)===String(y)) busy[k.day]=1; });
-    S.events.forEach(function(e){ if(e.date&&e.date.slice(0,4)===String(y)&&sourceEnabled(e)) busy[e.date]=1; });
+    S.tasks.forEach(function(k){ if(k.day&&k.day.slice(0,4)===String(y)&&inScope(k.projectId)) busy[k.day]=1; });
+    S.events.forEach(function(e){ if(e.date&&e.date.slice(0,4)===String(y)&&sourceEnabled(e)&&!(e.projectId&&!inScope(e.projectId))) busy[e.date]=1; });
     var t=today();
     var html='<div class="yr-grid">';
     for(var m=0;m<12;m++){
@@ -939,7 +1046,7 @@
   /* ---------- TIMELINE ---------- */
   function viewTimeline(){
     var tv=S.tlView||"months";
-    var html='<h2 class="view-h">Timeline</h2><p class="sub">Long-term view — each bar is a project phase. Add phases from the Projects tab.</p>';
+    var html='<h2 class="view-h">Timeline</h2><p class="sub">Long-term view — each bar is a project phase. Add phases from the Projects tab.'+(scopeActive()?' <b>Filtered:</b> '+esc(scopeLabel())+' — <button class="chip" data-act="clearscope" style="padding:2px 9px">show all</button>':'')+'</p>';
     html+='<div class="chips" style="margin-bottom:14px">'+[["months","Months"],["weeks","Weeks"],["days","Days"]].map(function(v){return '<button class="chip" data-act="tlview" data-v="'+v[0]+'" aria-pressed="'+(tv===v[0])+'">'+v[1]+'</button>';}).join("")+'</div>';
     if(!S.phases.length){ html+='<div class="card empty" style="padding:40px">No phases yet. Go to <b>Projects</b> → “+ phase” to map out project stages across weeks.</div>'; return html; }
     var starts=S.phases.map(function(p){return p.start;}).concat([today()]);
@@ -974,6 +1081,7 @@
     // rows by project
     var todayLeft=(today()>=min&&today()<=max)?diffDays(today(),min)*PPD:null;
     S.projects.forEach(function(p){
+      if(!inScope(p.id)) return;
       var phs=S.phases.filter(function(x){return x.projectId===p.id;});
       if(!phs.length) return;
       phs.forEach(function(ph){
@@ -1083,6 +1191,7 @@
         else { mk.day=viewDay; mk.block=to; mk.rollover=0; }
         save(); render(); toast(to==="someday"?"Moved to Someday":"Moved to "+to); } }
       else if(act==="tlview"){ S.tlView=a.dataset.v; save(); render(); }
+      else if(act==="clearscope"){ S.filterProjects=[]; S.activeProfile="all"; save(); render(); toast("Showing everything"); }
       else if(act==="newperson"){ openPersonModal(); }
       else if(act==="editperson"){ openPersonModal(S.people.find(function(x){return x.id===anyId;})); }
       else if(act==="logtouch"){ var pp=S.people.find(function(x){return x.id===anyId;}); if(pp){ pp.last=today(); if(pp.cadence) pp.next=addDays(today(),pp.cadence); save(); render(); toast("Logged a touch"); } }
@@ -1437,20 +1546,60 @@
   }
 
   function openProjModal(p, onDone){
-    var editing=!!p; p=p||{name:"",color:COLORS[S.projects.length%COLORS.length],notes:""}; var createdId=null;
+    var editing=!!p; p=p||{name:"",color:COLORS[S.projects.length%COLORS.length],notes:"",profileId:(S.activeProfile!=="all"&&S.activeProfile!=="fav"&&profileById(S.activeProfile))?S.activeProfile:null,fav:false}; var createdId=null;
+    var profOpts='<option value="">None</option>'+S.profiles.map(function(pr){return '<option value="'+pr.id+'" '+(pr.id===p.profileId?"selected":"")+'>'+esc((pr.emoji?pr.emoji+" ":"")+pr.name)+'</option>';}).join("");
     modal('<h3>'+(editing?"Edit project":"New project")+'</h3>'+
       '<div class="fld"><label>Name</label><input id="p-name" value="'+esc(p.name)+'"/></div>'+
       '<div class="fld"><label>Color</label><div class="swatches" id="p-sw">'+COLORS.map(function(c){return '<button class="sw" style="background:'+c+'" data-c="'+c+'" aria-pressed="'+(c===p.color)+'"></button>';}).join("")+'</div></div>'+
+      '<div class="row"><div class="fld"><label>Profile</label><select id="p-prof">'+profOpts+'</select></div>'+
+      '<div class="fld"><label>Favorite</label><div class="chips"><button type="button" class="chip" id="p-fav" aria-pressed="'+!!p.fav+'">'+(p.fav?"★":"☆")+' Favorite</button></div></div></div>'+
       '<div class="modal-actions">'+(editing?'<button class="btn ghost" id="p-del" style="margin-right:auto;color:var(--terra-deep)">Delete</button>':'')+
       '<button class="btn ghost" data-x>Cancel</button><button class="btn primary" id="m-save">Save</button></div>');
     var color=p.color; var sw=document.getElementById("p-sw");
     sw.onclick=function(e){ var b=e.target.closest(".sw"); if(!b)return; color=b.dataset.c; [].forEach.call(sw.children,function(c){c.setAttribute("aria-pressed",c===b);}); };
+    var favV=!!p.fav; var fb=document.getElementById("p-fav");
+    fb.onclick=function(){ favV=!favV; fb.setAttribute("aria-pressed",favV); fb.textContent=(favV?"★":"☆")+" Favorite"; };
     document.querySelector("[data-x]").onclick=close;
     document.getElementById("m-save").onclick=function(){ var name=document.getElementById("p-name").value.trim(); if(!name){toast("Name it");return;}
-      if(editing){ p.name=name; p.color=color; } else { var np={id:uid(),name:name,color:color,notes:""}; S.projects.push(np); createdId=np.id; }
+      var profV=document.getElementById("p-prof").value||null;
+      if(editing){ p.name=name; p.color=color; p.profileId=profV; p.fav=favV; } else { var np={id:uid(),name:name,color:color,notes:"",profileId:profV,fav:favV}; S.projects.push(np); createdId=np.id; }
       save(); fillProjSelect(); close(); render(); if(onDone&&createdId) onDone(createdId); };
     if(editing){ document.getElementById("p-del").onclick=function(){ confirmModal("Delete project?","Its tasks stay but lose their tag.","Delete",function(){
-      S.tasks.forEach(function(k){ if(k.projectId===p.id)k.projectId=null; }); S.projects=S.projects.filter(function(x){return x.id!==p.id;}); save(); fillProjSelect(); render(); }); }; }
+      S.tasks.forEach(function(k){ if(k.projectId===p.id)k.projectId=null; }); S.projects=S.projects.filter(function(x){return x.id!==p.id;}); S.filterProjects=S.filterProjects.filter(function(x){return x!==p.id;}); save(); fillProjSelect(); render(); }); }; }
+  }
+
+  function openProfileModal(pr){
+    var editing=!!pr; var base=pr||{name:"",emoji:"💼"};
+    var assigned={}; S.projects.forEach(function(p){ if(editing&&p.profileId===pr.id) assigned[p.id]=true; });
+    modal('<h3>'+(editing?"Edit profile":"New profile")+'</h3>'+
+      '<p class="sub">Profiles group projects into contexts — Work, School, Home. Pick one in the sidebar and Daybook shows only that world.</p>'+
+      '<div class="row"><div class="fld" style="flex:0 0 90px"><label>Icon</label><input id="pf-e" value="'+esc(base.emoji||"")+'" maxlength="4"/></div>'+
+      '<div class="fld"><label>Name</label><input id="pf-n" value="'+esc(base.name)+'" placeholder="e.g. School"/></div></div>'+
+      '<div class="fld"><label>Projects in this profile</label><div class="chips" id="pf-projs">'+
+        (S.projects.length?S.projects.map(function(p){return '<button type="button" class="chip" data-pid="'+p.id+'" aria-pressed="'+!!assigned[p.id]+'">'+esc(p.name)+'</button>';}).join(""):'<span class="sub">No projects yet</span>')+'</div>'+
+      (editing?'':'<div class="sub" style="font-size:11px;margin-top:6px">Tip: a project can live in one profile at a time.</div>')+'</div>'+
+      '<div class="modal-actions">'+(editing?'<button class="btn ghost" id="pf-del" style="margin-right:auto;color:var(--terra-deep)">Delete</button>':'')+
+      '<button class="btn ghost" data-x>Cancel</button><button class="btn primary" id="m-save">Save</button></div>');
+    document.querySelector("[data-x]").onclick=close;
+    var pp=document.getElementById("pf-projs");
+    pp.onclick=function(e){ var b=e.target.closest(".chip"); if(!b)return; var on=b.getAttribute("aria-pressed")==="true"; b.setAttribute("aria-pressed",!on); assigned[b.dataset.pid]=!on; };
+    document.getElementById("m-save").onclick=function(){
+      var name=document.getElementById("pf-n").value.trim(); if(!name){toast("Name it");return;}
+      var emoji=document.getElementById("pf-e").value.trim();
+      var target=pr;
+      if(!editing){ target={id:uid(),name:name,emoji:emoji}; S.profiles.push(target); }
+      else { target.name=name; target.emoji=emoji; }
+      S.projects.forEach(function(p){
+        if(assigned[p.id]) p.profileId=target.id;
+        else if(p.profileId===target.id) p.profileId=null;
+      });
+      save(); close(); render();
+    };
+    if(editing) document.getElementById("pf-del").onclick=function(){ confirmModal("Delete this profile?","Its projects stay — they just leave the profile.","Delete",function(){
+      S.projects.forEach(function(p){ if(p.profileId===pr.id) p.profileId=null; });
+      S.profiles=S.profiles.filter(function(x){return x.id!==pr.id;});
+      if(S.activeProfile===pr.id) S.activeProfile="all";
+      save(); render(); }); };
   }
 
   function openMilestoneModal(pid){
@@ -1787,7 +1936,7 @@
   /* ---------- menu: backup / import / help ---------- */
   function mergeData(inc){
     var added=0;
-    ["projects","tasks","templates","habits","events","phases","people","emails","jobs","improve","calSources"].forEach(function(key){
+    ["projects","tasks","templates","habits","events","phases","people","emails","jobs","improve","calSources","profiles"].forEach(function(key){
       var have={}; S[key].forEach(function(x){ if(x&&x.id) have[x.id]=1; });
       (inc[key]||[]).forEach(function(x){ if(x&&x.id&&!have[x.id]){ S[key].push(x); added++; } });
     });
