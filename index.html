@@ -587,7 +587,9 @@
   /* installable-app manifest + icon (data URIs — keeps this a single file) */
   var DB_ICON="data:image/svg+xml,"+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" fill="#565165"/><rect x="118" y="126" width="276" height="292" rx="30" fill="#fbfaf5"/><rect x="118" y="126" width="54" height="292" rx="0" fill="#c9724a"/><circle cx="145" cy="182" r="9" fill="#fbfaf5"/><circle cx="145" cy="256" r="9" fill="#fbfaf5"/><circle cx="145" cy="330" r="9" fill="#fbfaf5"/><rect x="206" y="190" width="150" height="18" rx="9" fill="#e2ddd1"/><rect x="206" y="248" width="150" height="18" rx="9" fill="#c9724a" opacity=".5"/><rect x="206" y="306" width="104" height="18" rx="9" fill="#e2ddd1"/></svg>');
   (function(){
-    var mf={name:"Daybook — Pencil Me In",short_name:"Daybook",description:"A day planner in a single file — offline, private, yours.",start_url:"./",scope:"./",display:"standalone",background_color:"#f3efe6",theme_color:"#565165",icons:[{src:DB_ICON,sizes:"any",type:"image/svg+xml",purpose:"any maskable"}]};
+    var mf={name:"Daybook — Pencil Me In",short_name:"Daybook",description:"A day planner in a single file — offline, private, yours.",start_url:"./",scope:"./",display:"standalone",background_color:"#f3efe6",theme_color:"#565165",icons:[{src:DB_ICON,sizes:"any",type:"image/svg+xml",purpose:"any maskable"}],
+      // Quick-capture: share a page/note/link to the installed app -> lands in the Backlog (handled by handleCaptureParams on load)
+      share_target:{action:"./",method:"GET",params:{title:"title",text:"text",url:"url"}}};
     var l=document.createElement("link"); l.rel="manifest"; l.href="data:application/manifest+json,"+encodeURIComponent(JSON.stringify(mf)); document.head.appendChild(l);
     var ai=document.createElement("link"); ai.rel="apple-touch-icon"; ai.href=DB_ICON; document.head.appendChild(ai);
   })();
@@ -1937,6 +1939,24 @@
     S.tasks.push({id:uid(),title:title,projectId:projectId||null,status:"todo",day:sd?null:(day||today()),block:sd?null:(block||null),at:at||null,priority:false,rollover:0,subs:[],created:today()});
     save();
   }
+  // Quick-capture: read title/text/url (or ?capture=) from the URL — used by the bookmarklet and the PWA share target.
+  function handleCaptureParams(){
+    try{
+      var q=new URLSearchParams(location.search||"");
+      var title=(q.get("title")||q.get("capture")||"").trim();
+      var text=(q.get("text")||"").trim();
+      var url=(q.get("url")||"").trim();
+      if(!title && !text && !url) return false;
+      var t=(title||text||url||"Captured item").replace(/\s+/g," ").slice(0,300);
+      var noteBits=[]; if(text && text!==t) noteBits.push(text); if(url) noteBits.push(url);
+      S.tasks.push({id:uid(),title:t,projectId:null,status:"todo",day:null,block:null,at:null,priority:false,rollover:0,subs:[],created:today(),notes:noteBits.length?plainToHtml(noteBits.join("\n")):null});
+      save();
+      try{ history.replaceState(null,"",location.pathname); }catch(e){} // don't re-capture on refresh
+      view="backlog"; syncNav();
+      setTimeout(function(){ toast("Captured to Backlog — "+t.slice(0,44)); },300);
+      return true;
+    }catch(e){ return false; }
+  }
   function addTaskInline(val, key){ if(!val.trim())return; var p=nlParse(val);
     var dayKey=(key&&key.indexOf("day:")===0)?key.slice(4):null;
     var sd = p.day==="someday" || (key==="someday" && !p.day);
@@ -2472,7 +2492,9 @@
     });
   }
   function doGhPush(after){
-    ghApi("PATCH","/gists/"+GH.gistId,{files:{"daybook.json":{content:JSON.stringify(S)}}})
+    var files={"daybook.json":{content:JSON.stringify(S)}};
+    try{ files["daybook.ics"]={content:buildICS(true)}; }catch(e){} // keep the subscribable reminder feed current
+    ghApi("PATCH","/gists/"+GH.gistId,{files:files})
       .then(function(){ ghLastSync=Date.now(); ghError=null; ghDirty=false; })
       .catch(function(e){ ghError=e.message; })
       .then(function(){ if(after) after(); else { ghBusy=false; updateSyncStatus(); } });
@@ -2632,6 +2654,8 @@
       (window.showSaveFilePicker?'<button class="btn" id="x-sync">🔗 '+(syncName?"Sync file: "+esc(syncName):"Link a sync file (auto-save)")+'</button>'+(syncName?'<button class="btn ghost" id="x-unsync">Unlink sync file</button>':""):"")+
       '<button class="btn" id="x-gh">☁️ '+(GH&&GH.gistId?"Cloud sync: connected":"Cloud sync via GitHub (cross-device)")+'</button>'+
       '<button class="btn" id="x-remind">🔔 Task-time reminders: '+(S.remind?"on":"off")+'</button>'+
+      '<button class="btn" id="x-feed">📡 Reminder calendar feed (subscribe)</button>'+
+      '<button class="btn" id="x-capture">⚡ Quick capture (bookmarklet / share)</button>'+
       '<button class="btn" id="x-lock">🔒 App lock: '+(lockCfg()?"on":"off")+'</button>'+
       '<button class="btn" id="x-archive">🗄 Archive done tasks older than 60 days'+(archN?' ('+archN+')':'')+'</button>'+
       '<button class="btn" id="x-install">📱 Add to phone home screen</button>'+
@@ -2644,6 +2668,8 @@
     document.getElementById("x-csv").onclick=exportCSV;
     document.getElementById("x-ics").onclick=exportICSFile;
     document.getElementById("x-restore").onclick=function(){ close(); openRestoreModal(); };
+    document.getElementById("x-feed").onclick=function(){ close(); openFeedModal(); };
+    document.getElementById("x-capture").onclick=function(){ close(); openCaptureModal(); };
     document.getElementById("x-lock").onclick=function(){ close(); openLockModal(); };
     document.getElementById("x-remind").onclick=function(){
       if(!S.remind){
@@ -3223,16 +3249,93 @@
     toast("Task list downloaded as CSV");
   }
   function icsEsc(s){ return String(s||"").replace(/\\/g,"\\\\").replace(/([,;])/g,"\\$1").replace(/\n/g,"\\n"); }
-  function exportICSFile(){
-    var L=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Daybook//Pencil Me In//EN"];
-    S.tasks.forEach(function(k){ if(!k.day) return;
-      L.push("BEGIN:VEVENT","UID:task-"+k.id+"@daybook","DTSTART;VALUE=DATE:"+k.day.replace(/-/g,""),"SUMMARY:"+icsEsc((k.status==="done"?"✓ ":"")+k.title),"END:VEVENT"); });
-    S.events.forEach(function(ev){ if(!ev.date) return;
-      L.push("BEGIN:VEVENT","UID:ev-"+ev.id+"@daybook","DTSTART;VALUE=DATE:"+ev.date.replace(/-/g,""),"SUMMARY:"+icsEsc(ev.title),"END:VEVENT"); });
+  // Build a full iCalendar. alarms=true adds VALARM reminders (used for the subscribable feed).
+  function buildICS(alarms){
+    var L=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Daybook//Pencil Me In//EN","CALSCALE:GREGORIAN","METHOD:PUBLISH","X-WR-CALNAME:Daybook","X-WR-CALDESC:Daybook tasks & deadlines"];
+    var horizon=addDays(today(),-1); // keep it lean: only today-forward
+    S.tasks.forEach(function(k){ if(!k.day || k.status==="done" || k.day<horizon) return;
+      var timed=/^\d{2}:\d{2}$/.test(k.at||"");
+      L.push("BEGIN:VEVENT","UID:task-"+k.id+"@daybook","SUMMARY:"+icsEsc(k.title));
+      if(timed){ L.push("DTSTART:"+k.day.replace(/-/g,"")+"T"+k.at.replace(":","")+"00","DURATION:PT30M"); }
+      else { L.push("DTSTART;VALUE=DATE:"+k.day.replace(/-/g,"")); }
+      if(k.notes){ var n=htmlToText(k.notes); if(n) L.push("DESCRIPTION:"+icsEsc(n)); }
+      if(alarms){ L.push("BEGIN:VALARM","ACTION:DISPLAY","DESCRIPTION:"+icsEsc(k.title),
+        "TRIGGER"+(timed?":-PT30M":";RELATED=START:PT8H"),"END:VALARM"); } // timed: 30m before; all-day: 8am day-of
+      L.push("END:VEVENT");
+    });
+    S.events.forEach(function(ev){ if(!ev.date || ev.date<horizon) return;
+      L.push("BEGIN:VEVENT","UID:ev-"+ev.id+"@daybook","DTSTART;VALUE=DATE:"+ev.date.replace(/-/g,""),"SUMMARY:"+icsEsc(ev.title));
+      if(alarms){ L.push("BEGIN:VALARM","ACTION:DISPLAY","DESCRIPTION:"+icsEsc(ev.title),"TRIGGER;RELATED=START:PT8H","END:VALARM"); }
+      L.push("END:VEVENT");
+    });
     L.push("END:VCALENDAR");
-    var blob=new Blob([L.join("\r\n")],{type:"text/calendar"});
+    return L.join("\r\n");
+  }
+  function exportICSFile(){
+    var blob=new Blob([buildICS(false)],{type:"text/calendar"});
     var a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="daybook-"+today()+".ics"; a.click();
     toast("Calendar file downloaded — import it anywhere");
+  }
+  /* ---------- quick capture (bookmarklet + share target) ---------- */
+  function openCaptureModal(){
+    var base=location.origin+location.pathname; // wherever this copy is hosted
+    var code="javascript:(function(){var u=encodeURIComponent(location.href),t=encodeURIComponent(document.title||''),s=encodeURIComponent(String(window.getSelection?window.getSelection():''));window.open("+JSON.stringify(base)+"+'?title='+t+'&url='+u+'&text='+s,'_blank');})();";
+    modal('<h3>⚡ Quick capture</h3>'+
+      '<p class="sub">Drop a page, link, or bit of text into your Backlog from anywhere — no account, no extension.</p>'+
+      '<div class="stack" style="gap:14px">'+
+      '<div><div style="font-weight:600;margin-bottom:6px">On a computer — the bookmarklet</div>'+
+        '<p class="sub" style="font-size:12.5px;margin:0 0 8px">Drag this button to your bookmarks bar. Click it on any web page to send it to Daybook.</p>'+
+        '<a id="cap-bm" style="display:inline-block;padding:8px 14px;border-radius:10px;background:var(--terra);color:#fff;font-weight:600;text-decoration:none;cursor:grab">➕ Save to Daybook</a>'+
+        '<div class="sub" style="font-size:11px;margin-top:8px">Can\'t drag it? <button class="btn ghost" id="cap-copy" style="padding:2px 8px;font-size:11px">Copy the code</button> and make a new bookmark with it as the URL.</div>'+
+      '</div>'+
+      '<div><div style="font-weight:600;margin-bottom:6px">On a phone — the Share sheet</div>'+
+        '<p class="sub" style="font-size:12.5px;margin:0">Install Daybook to your home screen first (⋯ → “Add to phone home screen”). Then on <b>Android</b>, “Daybook” appears in any app’s Share menu — tap it to capture. <b>iPhone</b> doesn’t allow share-to-webapp, so use the bookmarklet in Safari there.</p>'+
+      '</div>'+
+      '</div>'+
+      '<div class="modal-actions"><button class="btn primary" data-x>Done</button></div>');
+    document.querySelector("[data-x]").onclick=close;
+    var bm=document.getElementById("cap-bm"); bm.setAttribute("href",code);
+    bm.onclick=function(e){ e.preventDefault(); toast("Drag me to the bookmarks bar (don’t click)"); };
+    document.getElementById("cap-copy").onclick=function(){ (navigator.clipboard&&navigator.clipboard.writeText(code)); toast("Bookmarklet code copied"); };
+  }
+  /* ---------- subscribable reminder feed (.ics via the sync gist) ---------- */
+  function openFeedModal(){
+    if(!GH||!GH.token||!GH.gistId){
+      modal('<h3>📡 Reminder calendar feed</h3><p class="sub">This publishes your deadlines as a live calendar your phone can subscribe to — so your normal Calendar app fires the reminders, even when Daybook is closed. It needs <b>☁️ Cloud sync</b> turned on first (that’s where the feed is hosted).</p><div class="modal-actions"><button class="btn ghost" data-x>Close</button><button class="btn primary" id="feed-gh">Set up Cloud sync</button></div>');
+      document.querySelector("[data-x]").onclick=close;
+      document.getElementById("feed-gh").onclick=function(){ close(); openGhModal(); };
+      return;
+    }
+    modal('<h3>📡 Reminder calendar feed</h3><p class="sub">Building your feed…</p><div class="modal-actions"><button class="btn ghost" data-x>Close</button></div>');
+    document.querySelector("[data-x]").onclick=close;
+    // ensure daybook.ics exists & is current, then read the gist owner for the raw URL
+    doGhPush(function(){
+      ghBusy=false; updateSyncStatus();
+      ghApi("GET","/gists/"+GH.gistId).then(function(g){
+        var login=g&&g.owner&&g.owner.login;
+        var f=g&&g.files&&g.files["daybook.ics"];
+        if(!login||!f){ toast("Couldn't build the feed — try Sync now first"); return; }
+        var https="https://gist.githubusercontent.com/"+login+"/"+GH.gistId+"/raw/daybook.ics";
+        var webcal=https.replace(/^https:/,"webcal:");
+        var body='<h3>📡 Reminder calendar feed</h3>'+
+          '<p class="sub">Subscribe your phone or computer’s calendar to this link. It refreshes on its own, and reminders fire from your real Calendar app — no need to keep Daybook open.</p>'+
+          '<div class="fld"><label>Subscription link</label><input id="feed-url" readonly value="'+esc(webcal)+'" style="font-size:12px"/></div>'+
+          '<div class="stack">'+
+          '<a class="btn" href="'+esc(webcal)+'">➕ Subscribe now (opens your calendar app)</a>'+
+          '<button class="btn" id="feed-copy">📋 Copy the link</button>'+
+          '</div>'+
+          '<div class="sub" style="font-size:12px;line-height:1.5;margin-top:12px">'+
+          '<b>iPhone:</b> Settings → Calendar → Accounts → Add Account → Other → Add Subscribed Calendar → paste the link.<br>'+
+          '<b>Google Calendar:</b> Other calendars → + → From URL → paste the <i>https</i> version.<br>'+
+          '<span style="opacity:.75">Deadlines with a 🕒 time remind 30 min before; all-day tasks remind at 8am. Calendar apps refresh subscriptions every few hours.</span>'+
+          '</div>'+
+          '<div class="modal-actions"><button class="btn primary" data-x>Done</button></div>';
+        modal(body);
+        document.querySelector("[data-x]").onclick=close;
+        document.getElementById("feed-copy").onclick=function(){ (navigator.clipboard&&navigator.clipboard.writeText(https)); toast("Feed link copied"); };
+        var fu=document.getElementById("feed-url"); fu.onclick=function(){ fu.select(); };
+      }).catch(function(e){ toast("Couldn't read the feed — "+e.message); });
+    });
   }
 
   /* ---------- sync status chip ---------- */
@@ -3383,6 +3486,7 @@
   applySidebarState();
   applyRightbarState();
   onOpen();
+  handleCaptureParams();   // quick-capture from bookmarklet / PWA share -> Backlog (sets view before first paint)
   render();
   refreshCalendars(function(){ if(view==="calendar") render(); });
   ghPull();
