@@ -396,6 +396,26 @@
   .tasks.drag-over{ outline:2px dashed var(--terra); outline-offset:3px; border-radius:8px; }
   .jobs-col.drag-over{ border-color: var(--terra); }
 
+  /* time-blocking Day view */
+  .day-head{ display:flex; align-items:center; gap:10px; margin-bottom:12px; }
+  .day-title{ margin:0; font-size:18px; }
+  .day-events{ display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
+  .day-unsched{ background:var(--sheet); border:1px solid var(--line-soft); border-radius:14px; padding:10px 12px; margin-bottom:14px; }
+  .day-unsched-h{ font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-faint); margin-bottom:6px; }
+  ul.day-tray{ max-height:230px; overflow-y:auto; }
+  .day-tray.empty-tray{ color:var(--ink-faint); font-size:13px; padding:6px 2px; }
+  .day-tray.drag-over{ outline:2px dashed var(--terra); outline-offset:3px; border-radius:10px; }
+  .day-grid{ background:var(--sheet); border:1px solid var(--line-soft); border-radius:14px; overflow:hidden; }
+  .hour-row{ display:flex; align-items:stretch; border-top:1px solid var(--line-soft); min-height:46px; }
+  .hour-row:first-child{ border-top:0; }
+  .hour-label{ flex:0 0 62px; padding:7px 10px; font-size:11px; color:var(--ink-faint); text-align:right; border-right:1px solid var(--line-soft); user-select:none; }
+  .hourslot{ position:relative; flex:1 1 auto; min-width:0; padding:4px 8px; }
+  .hourslot.drag-over{ background:var(--terra-bg); outline:2px dashed var(--terra); outline-offset:-2px; }
+  .hourslot .tasks{ gap:4px; }
+  .hourslot .task{ border-bottom:0; padding:5px 4px; }
+  .now-line{ position:absolute; left:0; right:0; height:2px; background:var(--terra); z-index:3; pointer-events:none; }
+  .now-line::before{ content:""; position:absolute; left:-4px; top:-3px; width:8px; height:8px; border-radius:50%; background:var(--terra); }
+
   /* today layout — centered column + side log panel */
   .today-flex{ display:flex; gap:18px; align-items:flex-start; }
   .today-main{ flex:1 1 auto; min-width:0; display:flex; flex-direction:column; gap:16px; }
@@ -536,6 +556,7 @@
     <nav class="nav" id="nav" aria-label="Views">
       <button data-view="hub">Hub</button>
       <button data-view="today" aria-current="true">Today</button>
+      <button data-view="day">Day</button>
       <button data-view="week">Week</button>
       <button data-view="backlog">Backlog</button>
       <button data-view="projects">Projects</button>
@@ -904,6 +925,7 @@
     ensureOrd();
     var m=document.getElementById("view");
     if(view==="today") m.innerHTML=viewToday();
+    else if(view==="day") m.innerHTML=viewDayGrid();
     else if(view==="week") m.innerHTML=viewWeek();
     else if(view==="backlog") m.innerHTML=viewBacklog();
     else if(view==="projects") m.innerHTML=viewProjects();
@@ -1122,6 +1144,41 @@
     S.focus[viewDay]=S.focus[viewDay]||[];
     S.focus[viewDay].push({id:uid(),text:at.title||val,projectId:at.projectId||null,done:false});
     pendingFocus="focus"; save(); render();
+  }
+  /* ---------- time-blocking hour-grid Day view ---------- */
+  function viewDayGrid(){
+    var d=viewDay, isToday=d===today();
+    var START=6, END=23;                       // 6am–11pm rows
+    var all=S.tasks.filter(function(k){ return k.day===d && k.status!=="done" && inScope(k.projectId); });
+    var isTimed=function(k){ return /^\d{2}:\d{2}$/.test(k.at||""); };
+    var timed=all.filter(isTimed), unsched=all.filter(function(k){ return !isTimed(k); });
+    var earliest=timed.reduce(function(m,k){ return Math.min(m,+k.at.slice(0,2)); }, START);
+    var latest=timed.reduce(function(m,k){ return Math.max(m,+k.at.slice(0,2)); }, END);
+    var lo=Math.min(START,earliest), hi=Math.max(END,latest);
+    var evs=S.events.filter(function(e){ return e.date===d; });
+    var head='<div class="day-head">'+
+      '<button class="icon-btn" data-act="daynav" data-d="-1" aria-label="Previous day" title="Previous day">‹</button>'+
+      '<h2 class="day-title">'+esc(niceDate(d))+(isToday?' · today':'')+'</h2>'+
+      '<button class="icon-btn" data-act="daynav" data-d="1" aria-label="Next day" title="Next day">›</button>'+
+      (isToday?'':'<button class="chip" data-act="daynav" data-d="0">Back to today</button>')+
+      '</div>';
+    var evBanner=evs.length?'<div class="day-events">'+evs.map(function(e){ return '<span class="pill block">📅 '+esc(e.title)+'</span>'; }).join("")+'</div>':'';
+    var tray='<div class="day-unsched"><div class="day-unsched-h">Unscheduled ('+unsched.length+') — drag onto an hour to time-block</div>'+
+      (unsched.length?'<ul class="tasks day-tray" data-unsched="1">'+unsched.map(taskLi).join("")+'</ul>'
+                     :'<div class="day-tray empty-tray" data-unsched="1">Nothing unscheduled — drop a task here to clear its time.</div>')+'</div>';
+    var now=new Date(), nowH=now.getHours(), nowM=now.getMinutes();
+    var rows='';
+    for(var h=lo; h<=hi; h++){
+      var hh=String(h).padStart(2,"0");
+      var slot=timed.filter(function(k){ return +k.at.slice(0,2)===h; }).sort(function(a,b){ return a.at.localeCompare(b.at); });
+      var label=(h%12||12)+(h<12?'am':'pm');
+      var line=(isToday&&nowH===h)?'<div class="now-line" style="top:'+(nowM/60*100).toFixed(1)+'%"></div>':'';
+      rows+='<div class="hour-row"><div class="hour-label">'+label+'</div>'+
+        '<div class="hourslot" data-hour="'+hh+'">'+line+
+          (slot.length?'<ul class="tasks">'+slot.map(taskLi).join("")+'</ul>':'')+
+        '</div></div>';
+    }
+    return head+evBanner+tray+'<div class="day-grid">'+rows+'</div>';
   }
   function viewToday(){
     var t=today(), vd=viewDay;
@@ -1659,6 +1716,8 @@
       if(dragUnitKey){ var u=e.target.closest(".today-unit[data-unit]"); if(u && u.dataset.unit!==dragUnitKey){ e.preventDefault(); e.dataTransfer.dropEffect="move"; clearDrag(); u.classList.add("unit-over"); } return; }
       if(dragFocusId){ var ulf=e.target.closest('.tasks[data-list="focus"]'); if(ulf){ e.preventDefault(); e.dataTransfer.dropEffect="move"; clearDrag(); ulf.classList.add("drag-over"); } return; }
       if(dragTaskId){
+        var hs0=e.target.closest(".hourslot[data-hour], .day-tray[data-unsched]");
+        if(hs0){ e.preventDefault(); e.dataTransfer.dropEffect="move"; clearDrag(); hs0.classList.add("drag-over"); return; }
         var li=e.target.closest(".task[data-id]");
         var ul=e.target.closest(".tasks[data-list]");
         dragNestTarget=null;
@@ -1686,6 +1745,13 @@
           var fto=(ftgt&&ftgt.dataset.id!==dragFocusId)?arr.findIndex(function(x){return x.id===ftgt.dataset.id;}):-1;
           arr.splice(fto<0?arr.length:fto,0,item); save(); render(); } }
         dragFocusId=null; clearDrag(); return; }
+      if(dragTaskId){ var hs=e.target.closest(".hourslot[data-hour], .day-tray[data-unsched]");
+        if(hs){ e.preventDefault(); var kt=S.tasks.find(function(x){return x.id===dragTaskId;});
+          if(kt){ kt.day=viewDay; kt.rollover=0;
+            if(hs.dataset.unsched){ kt.at=null; }
+            else { kt.at=hs.dataset.hour+":00"; kt.block=blockForTime(kt.at); }
+            save(); render(); toast(hs.dataset.unsched?"Cleared time":"Blocked at "+fmtTime(kt.at)); }
+          dragTaskId=null; dragNestTarget=null; clearDrag(); hideDragDock(); return; } }
       if(dragTaskId && dragNestTarget){ e.preventDefault(); var nid=dragTaskId, ntgt=dragNestTarget; dragTaskId=null; dragNestTarget=null; clearDrag(); hideDragDock(); nestTask(nid,ntgt); return; }
       if(dragTaskId){ var ul=e.target.closest(".tasks[data-list]"); if(ul){ e.preventDefault();
         if(ul.dataset.list==="focus"){ var did=dragTaskId; dragTaskId=null; clearDrag(); hideDragDock(); addTaskToFocus(did); return; }
