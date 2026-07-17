@@ -622,13 +622,16 @@
   var SPU_PROJECT_ID="spu-social-psych-2026";
   var SPU_PLAN_REVISION=2026071404;
   // ---- merge-by-item sync (Phase 2) ----
-  var IDLISTS=["projects","tasks","templates","habits","events","phases","people","emails","jobs","improve","calSources","profiles","archive"];
+  var IDLISTS=["projects","tasks","templates","routines","habits","events","phases","people","emails","jobs","improve","calSources","profiles","archive"];
   var IDMAPS=["notes","focus","habitLog"]; // date-keyed maps merged per key
   function clone(x){ return JSON.parse(JSON.stringify(x)); }
   function itemSig(x){ if(!x||typeof x!=="object") return JSON.stringify(x); var o={}; for(var k in x){ if(k!=="_m") o[k]=x[k]; } return JSON.stringify(o); }
   // Stamp per-item modified-times and deletion tombstones by diffing against the previous saved state.
   function stampChanges(prev,cur){
     var now=Date.now();
+    if(!cur._del) cur._del={};
+    if(!cur._mm) cur._mm={notes:{},focus:{},habitLog:{}};
+    IDMAPS.forEach(function(m){ if(!cur._mm[m]) cur._mm[m]={}; });
     IDLISTS.forEach(function(key){
       var pv={}; (prev&&prev[key]||[]).forEach(function(x){ if(x&&x.id) pv[x.id]=x; });
       var seen={};
@@ -716,6 +719,8 @@
     d.tasks.forEach(function(k){ if(k.notes) k.notes=sanitizeRTE(k.notes); });
     d.archive.forEach(function(k){ if(k.notes) k.notes=sanitizeRTE(k.notes); });
     // ---- sync metadata (Phase 2: merge-by-item) ----
+    d.routines=d.routines||[];                           // multi-task checklists (Phase 5)
+    d.jobs.forEach(function(j){ if(!Array.isArray(j.checklist)) j.checklist=[]; if(j.nextDate===undefined) j.nextDate=null; });
     d._del=d._del||{};                                   // tombstones: id -> delete time
     d._mm=d._mm||{}; d._mm.notes=d._mm.notes||{}; d._mm.focus=d._mm.focus||{}; d._mm.habitLog=d._mm.habitLog||{};
     var _base=d.savedAt||Date.now();
@@ -750,7 +755,7 @@
         {id:uid(),name:"Personal",color:"var(--p0)",notes:"",profileId:prHome.id,fav:false},
         {id:uid(),name:"Work",color:"var(--p1)",notes:"",profileId:prWork.id,fav:false}
       ],
-      tasks:[], templates:[], focus:{}, notes:{}, habits:[
+      tasks:[], templates:[], routines:[], focus:{}, notes:{}, habits:[
         {id:uid(),name:"Water",goal:8},{id:uid(),name:"Fresh air",goal:1},{id:uid(),name:"Move",goal:1}
       ],
       habitLog:{}, events:[], phases:[], dismissed:[], calMonth:null,
@@ -1478,7 +1483,90 @@
       }).join("")+'</ul>';
       html+='<div style="margin-top:16px">'+fold("templates","↻ Repeating tasks",tl)+'</div>';
     }
+    html+='<div style="margin-top:16px">'+fold("routines","📋 Routines &amp; checklists",routinesBodyHtml())+'</div>';
     return html;
+  }
+  // ---- Routines: reusable multi-task checklists you stamp onto a day ----
+  function routinesBodyHtml(){
+    var list = S.routines.length ? '<ul class="tasks">'+S.routines.map(function(r){
+      var n=(r.items||[]).length;
+      return '<li class="task" data-id="'+r.id+'"><div class="task-main" data-act="routine-edit" data-rid="'+r.id+'" title="Edit this routine"><div class="task-title">'+esc(r.emoji||"📋")+' '+esc(r.name||"Untitled")+'</div><div class="task-meta"><span class="pill block">'+n+' task'+(n===1?"":"s")+'</span></div></div>'+
+        '<button class="chip" data-act="routine-stamp" data-rid="'+r.id+'">Add to a day…</button>'+
+        '<button class="task-x" data-act="routine-del" data-rid="'+r.id+'" style="opacity:1" aria-label="Delete routine">✕</button></li>';
+    }).join("")+'</ul>' : '<div class="empty" style="padding:10px 2px">No routines yet. Save a set of tasks you do often — a class-prep checklist, a weekly setup — then stamp it onto any day in one click.</div>';
+    return list+'<div class="stack" style="margin-top:10px"><button class="btn" data-act="routine-new">＋ New routine</button><button class="btn ghost" data-act="routine-fromtoday">📸 Save today’s tasks as a routine</button></div>';
+  }
+  // Parse a textarea into routine items. One task per line; leading * or ! = important; a line starting with "-" or "  " (indent) = a subtask of the task above.
+  function parseRoutineItems(text){
+    var items=[], cur=null;
+    (text||"").split(/\r?\n/).forEach(function(raw){
+      if(!raw.trim()) return;
+      var isSub=/^(\s{2,}|\t|-\s|•\s|•)/.test(raw);
+      var line=raw.replace(/^\s+/,"").replace(/^[-•]\s*/,"").trim();
+      if(isSub && cur){ cur.subs.push(line); return; }
+      var imp=/^[*!]\s*/.test(line); if(imp) line=line.replace(/^[*!]\s*/,"").trim();
+      var at=null, tm=line.match(/@\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+      if(tm){ var h=+tm[1]%24; if((tm[3]||"").toLowerCase()==="pm"&&h<12)h+=12; if((tm[3]||"").toLowerCase()==="am"&&h===12)h=0; at=String(h).padStart(2,"0")+":"+(tm[2]||"00"); line=line.replace(tm[0],"").trim(); }
+      if(!line) return;
+      cur={title:line,priority:imp,at:at,block:at?null:null,subs:[]}; items.push(cur);
+    });
+    return items;
+  }
+  function routineItemsToText(r){
+    return (r.items||[]).map(function(it){
+      var head=(it.priority?"* ":"")+it.title+(it.at?" @"+fmtTime(it.at):"");
+      var subs=(it.subs||[]).map(function(s){return "  - "+s;}).join("\n");
+      return head+(subs?"\n"+subs:"");
+    }).join("\n");
+  }
+  function openRoutineModal(r){
+    var editing=!!r; r=r||{name:"",emoji:"📋",items:[]};
+    modal('<h3>'+(editing?"Edit routine":"New routine")+'</h3>'+
+      '<p class="sub">A reusable checklist. One task per line. Start a line with <b>*</b> for important, add <b>@2pm</b> for a time, and indent (or start with <b>-</b>) to make a subtask.</p>'+
+      '<div class="row"><div class="fld" style="flex:0 0 80px"><label>Icon</label><input id="r-emoji" value="'+esc(r.emoji||"📋")+'" maxlength="2"/></div>'+
+      '<div class="fld"><label>Name</label><input id="r-name" value="'+esc(r.name||"")+'" placeholder="e.g. Class-prep checklist"/></div></div>'+
+      '<div class="fld"><label>Tasks</label><textarea id="r-items" rows="8" placeholder="* Finalize slides @9am\n  - check clicker\n  - upload to Canvas\nPost the reading quiz\nEmail the TA">'+esc(routineItemsToText(r))+'</textarea></div>'+
+      '<div class="modal-actions">'+(editing?'<button class="btn ghost" id="r-del" style="margin-right:auto;color:var(--terra-deep)">Delete</button>':"")+'<button class="btn ghost" data-x>Cancel</button><button class="btn primary" id="r-save">Save</button></div>');
+    document.querySelector("[data-x]").onclick=close;
+    document.getElementById("r-save").onclick=function(){
+      var name=document.getElementById("r-name").value.trim(); if(!name){ toast("Name your routine"); return; }
+      var items=parseRoutineItems(document.getElementById("r-items").value);
+      var emoji=document.getElementById("r-emoji").value.trim()||"📋";
+      if(editing){ r.name=name; r.emoji=emoji; r.items=items; }
+      else { S.routines.push({id:uid(),name:name,emoji:emoji,items:items}); }
+      save(); close(); render(); toast(editing?"Routine saved":"Routine created");
+    };
+    if(editing) document.getElementById("r-del").onclick=function(){ confirmModal("Delete this routine?","The checklist is removed. Tasks you already stamped from it stay.","Delete",function(){ S.routines=S.routines.filter(function(x){return x.id!==r.id;}); save(); close(); render(); }); };
+  }
+  function saveTodayAsRoutine(){
+    var t=today();
+    var todays=S.tasks.filter(function(k){ return k.day===t && k.status!=="done" && inScope(k.projectId); });
+    if(!todays.length){ toast("No open tasks today to save"); return; }
+    var items=orderTasks(todays,false).map(function(k){ return {title:k.title,priority:!!k.priority,at:k.at||null,block:k.block||null,subs:(k.subs||[]).map(function(s){return s.text;})}; });
+    var r={id:uid(),name:"Routine from "+niceDate(t),emoji:"📋",items:items};
+    S.routines.push(r); save(); render(); openRoutineModal(r); toast("Saved "+items.length+" tasks — rename it");
+  }
+  function stampRoutine(r, day){
+    if(!r) return; var made=0;
+    (r.items||[]).forEach(function(it){
+      S.tasks.push({id:uid(),title:it.title,projectId:it.projectId||null,status:"todo",day:day,block:it.block||(it.at?blockForTime(it.at):null),at:it.at||null,priority:!!it.priority,rollover:0,subs:(it.subs||[]).map(function(s){return {id:uid(),text:s,done:false};}),created:today()});
+      made++;
+    });
+    save(); render();
+    toast(made+" task"+(made===1?"":"s")+" added to "+(day===today()?"today":niceDate(day)));
+  }
+  function openStampRoutineModal(r){
+    if(!r) return;
+    modal('<h3>Add “'+esc(r.name)+'” to a day</h3><p class="sub">'+((r.items||[]).length)+' task'+((r.items||[]).length===1?"":"s")+' will be added to the day you pick.</p>'+
+      '<div class="stack">'+
+      '<button class="btn" data-day="'+today()+'">Today</button>'+
+      '<button class="btn" data-day="'+addDays(today(),1)+'">Tomorrow</button>'+
+      '<div class="fld"><label>Or pick a date</label><input type="date" id="r-pick" value="'+today()+'"/></div>'+
+      '<button class="btn primary" id="r-pickgo">Add to picked date</button>'+
+      '</div><div class="modal-actions"><button class="btn ghost" data-x>Cancel</button></div>');
+    document.querySelector("[data-x]").onclick=close;
+    document.getElementById("modal-root").querySelectorAll("[data-day]").forEach(function(b){ b.onclick=function(){ stampRoutine(r,b.dataset.day); close(); }; });
+    document.getElementById("r-pickgo").onclick=function(){ var d=document.getElementById("r-pick").value; if(!d){toast("Pick a date");return;} stampRoutine(r,d); close(); };
   }
   function recDesc(tp){
     if(tp.freq==="daily") return "↻ daily";
@@ -1870,6 +1958,11 @@
       else if(act==="imp-del"){ S.improve=S.improve.filter(function(x){return x.id!==anyId;}); save(); render(); }
       else if(act==="tpl-pause"){ var tp1=S.templates.find(function(x){return x.id===a.dataset.tid;}); if(tp1){ tp1.paused=!tp1.paused; save(); render(); toast(tp1.paused?"Paused — no new copies":"Resumed"); } }
       else if(act==="tpl-del"){ var ti=S.templates.findIndex(function(x){return x.id===a.dataset.tid;}); if(ti>=0){ var tdel=S.templates[ti]; S.templates.splice(ti,1); save(); render(); toastUndo("Repeat removed",function(){ S.templates.splice(Math.min(ti,S.templates.length),0,tdel); save(); render(); }); } }
+      else if(act==="routine-new"){ openRoutineModal(); }
+      else if(act==="routine-fromtoday"){ saveTodayAsRoutine(); }
+      else if(act==="routine-edit"){ openRoutineModal(S.routines.find(function(x){return x.id===a.dataset.rid;})); }
+      else if(act==="routine-stamp"){ openStampRoutineModal(S.routines.find(function(x){return x.id===a.dataset.rid;})); }
+      else if(act==="routine-del"){ var ri=S.routines.findIndex(function(x){return x.id===a.dataset.rid;}); if(ri>=0){ var rdel=S.routines[ri]; S.routines.splice(ri,1); save(); render(); toastUndo("Routine deleted",function(){ S.routines.splice(Math.min(ri,S.routines.length),0,rdel); save(); render(); }); } }
     };
     var rbEl2=document.getElementById("rightbar"); if(rbEl2) rbEl2.onclick=v.onclick;
   }
@@ -2658,7 +2751,7 @@
   /* ---------- menu: backup / import / help ---------- */
   function mergeData(inc){
     var added=0;
-    ["projects","tasks","templates","habits","events","phases","people","emails","jobs","improve","calSources","profiles","archive"].forEach(function(key){
+    ["projects","tasks","templates","routines","habits","events","phases","people","emails","jobs","improve","calSources","profiles","archive"].forEach(function(key){
       var have={}; S[key].forEach(function(x){ if(x&&x.id) have[x.id]=1; });
       (inc[key]||[]).forEach(function(x){ if(x&&x.id&&!have[x.id]){ S[key].push(x); added++; } });
     });
@@ -2862,6 +2955,7 @@
     var s1title = IN_CLAUDE ? 'Copy this into the chat' : 'Build the prompt';
     var s1sub = IN_CLAUDE ? 'Paste it into the Claude conversation you already have open.' : 'Copies a ready-to-send message to your clipboard.';
     var btns='<button class="btn primary" id="cap-copy">Copy prompt for Claude</button>'+
+      '<button class="btn" id="cap-copy-edit" title="Includes your current tasks so Claude can finish, reschedule, or edit them">🔄 Prompt to update my plan</button>'+
       (IN_CLAUDE?'':'<button class="btn" id="cap-open">Open Claude ↗</button>');
     var inner='<p class="sub" style="margin:4px 0 10px">'+intro+'</p>'+
       '<textarea id="cap-in" placeholder="e.g. Big week. Finish the Q3 deck by Thursday for Marketing, I applied to Acme for a Senior PM role and have a call next Tuesday, and I need to reply to the flagged budget email from Sarah."></textarea>'+
@@ -2873,6 +2967,7 @@
   function bindCapture(){
     var g=function(id){return document.getElementById(id);};
     if(g("cap-copy")) g("cap-copy").onclick=function(){ var b=g("cap-in").value.trim(); if(!b){toast("Write a blurb first");return;} copyText(buildAIPrompt(b),function(){toast(IN_CLAUDE?"Copied — paste it into this chat":"Prompt copied — paste it into Claude");}); };
+    if(g("cap-copy-edit")) g("cap-copy-edit").onclick=function(){ var b=g("cap-in").value.trim(); if(!b){toast("Say what changed first (e.g. 'finished the deck, push grading to Monday')");return;} copyText(buildAIPrompt(b,true),function(){toast("Update prompt copied — includes your task list so Claude can edit it");}); };
     if(g("cap-open")) g("cap-open").onclick=function(){ window.open("https://claude.ai/new","_blank","noopener"); };
     if(g("cap-import")) g("cap-import").onclick=function(){ previewAIImport(g("cap-out").value); };
   }
@@ -2916,7 +3011,12 @@
       '<button class="task-x" data-act="email-del" style="opacity:1" aria-label="delete">✕</button></li>';
   }
   function jobCardHtml(j){
-    return '<div class="job-card" data-act="job-open" data-id="'+j.id+'" draggable="true"><b>'+esc(j.company||"—")+'</b>'+(j.role?'<div class="jr">'+esc(j.role)+'</div>':"")+(j.next?'<div class="jn">→ '+esc(j.next)+'</div>':"")+'</div>';
+    var cl=j.checklist||[]; var done=cl.filter(function(c){return c.done;}).length;
+    var t=today();
+    var datePill = j.nextDate ? '<span class="pill '+(j.nextDate<t?'imp':'block')+'" style="font-size:10.5px">📅 '+esc(niceDate(j.nextDate))+(j.nextDate<t?' · overdue':'')+'</span>' : '';
+    var clPill = cl.length ? '<span class="pill block" style="font-size:10.5px">☑ '+done+'/'+cl.length+'</span>' : '';
+    var meta = (datePill||clPill) ? '<div class="task-meta" style="margin-top:5px">'+datePill+clPill+'</div>' : '';
+    return '<div class="job-card" data-act="job-open" data-id="'+j.id+'" draggable="true"><b>'+esc(j.company||"—")+'</b>'+(j.role?'<div class="jr">'+esc(j.role)+'</div>':"")+(j.next?'<div class="jn">→ '+esc(j.next)+'</div>':"")+meta+'</div>';
   }
   function impRow(e){
     var m=IMP_META[e.type]||IMP_META.idea;
@@ -2937,28 +3037,68 @@
   function addImprove(type,text){ text=(text||"").trim(); if(!text)return; S.improve.unshift({id:uid(),type:type||"idea",text:text,date:today()}); save(); render(); }
   function copyImprove(){ if(!S.improve.length){toast("Nothing logged yet");return;} var lines=S.improve.map(function(e){return "- ["+e.type+"] "+e.text+" ("+e.date+")";}); copyText("Here is my Daybook improvement log from real day-to-day use. Please suggest and implement upgrades based on these notes:\n\n"+lines.join("\n"),function(){toast("Log copied for Claude");}); }
 
+  function parseChecklist(text, prev){
+    prev=prev||[];
+    return (text||"").split(/\r?\n/).map(function(l){return l.trim();}).filter(Boolean).map(function(l){
+      var done=/^\[x\]/i.test(l); var txt=l.replace(/^\[[ x]\]\s*/i,"").replace(/^[-*•]\s*/,"").trim();
+      var old=prev.find(function(o){return o.text===txt;});
+      return {id:old?old.id:uid(), text:txt, done:done};
+    }).filter(function(c){return c.text;});
+  }
+  function checklistToText(cl){ return (cl||[]).map(function(c){return (c.done?"[x] ":"[ ] ")+c.text;}).join("\n"); }
   function openJobModal(j){
-    var editing=!!j; j=j||{company:"",role:"",stage:"Saved",next:"",link:"",notes:""};
+    var editing=!!j; j=j||{company:"",role:"",stage:"Saved",next:"",nextDate:null,link:"",notes:"",checklist:[]};
     modal('<h3>'+(editing?"Edit job":"Add job")+'</h3>'+
       '<div class="row"><div class="fld"><label>Company</label><input id="j-co" value="'+esc(j.company)+'"/></div>'+
       '<div class="fld"><label>Role</label><input id="j-role" value="'+esc(j.role)+'"/></div></div>'+
       '<div class="row"><div class="fld"><label>Stage</label><select id="j-stage">'+JOB_STAGES.map(function(s){return '<option '+(s===(j.stage||"Saved")?"selected":"")+'>'+s+'</option>';}).join("")+'</select></div>'+
-      '<div class="fld"><label>Next step</label><input id="j-next" value="'+esc(j.next)+'" placeholder="e.g. Call Tue 2pm"/></div></div>'+
+      '<div class="fld"><label>Next step</label><input id="j-next" value="'+esc(j.next)+'" placeholder="e.g. Call the recruiter"/></div></div>'+
+      '<div class="fld"><label>Follow-up / deadline date <span class="sub" style="font-weight:400">— shows a reminder in your calendar feed</span></label><input id="j-nextdate" type="date" value="'+esc(j.nextDate||"")+'"/></div>'+
       '<div class="fld"><label>Link</label><input id="j-link" value="'+esc(j.link)+'" placeholder="https://…"/></div>'+
+      '<div class="fld"><label>Checklist <span class="sub" style="font-weight:400">— one per line, use [x] for done</span></label><textarea id="j-check" rows="4" placeholder="[ ] Tailor resume\n[ ] Research the team\n[x] Submit application">'+esc(checklistToText(j.checklist))+'</textarea></div>'+
       '<div class="fld"><label>Notes</label>'+richTextHtml(null,j.notes||"","",60,"j-notes","rte-compact")+'</div>'+
       '<div class="modal-actions">'+(editing?'<button class="btn ghost" id="j-del" style="margin-right:auto;color:var(--terra-deep)">Delete</button>':"")+'<button class="btn ghost" data-x>Cancel</button><button class="btn primary" id="m-save">Save</button></div>');
     document.querySelector("[data-x]").onclick=close;
     document.getElementById("m-save").onclick=function(){ var co=document.getElementById("j-co").value.trim(); if(!co){toast("Company name?");return;}
-      var data={company:co,role:document.getElementById("j-role").value.trim(),stage:document.getElementById("j-stage").value,next:document.getElementById("j-next").value.trim(),link:document.getElementById("j-link").value.trim(),notes:rteValue("j-notes")};
+      var data={company:co,role:document.getElementById("j-role").value.trim(),stage:document.getElementById("j-stage").value,next:document.getElementById("j-next").value.trim(),nextDate:document.getElementById("j-nextdate").value||null,link:document.getElementById("j-link").value.trim(),notes:rteValue("j-notes"),checklist:parseChecklist(document.getElementById("j-check").value, j.checklist)};
       if(editing){ for(var k in data) j[k]=data[k]; } else { data.id=uid(); S.jobs.push(data); }
       save(); close(); render(); };
     if(editing) document.getElementById("j-del").onclick=function(){ confirmModal("Delete this job?","It's removed from the board.","Delete",function(){ S.jobs=S.jobs.filter(function(x){return x.id!==j.id;}); save(); render(); }); };
   }
 
   /* ---------- AI intake (round-trip via Claude) ---------- */
-  function buildAIPrompt(blurb){
+  // A compact snapshot of open tasks (with ids) so Claude can update/finish/reschedule them.
+  function currentTasksSnapshot(){
+    var t=today();
+    var open=S.tasks.filter(function(k){return k.status!=="done";});
+    // sort: dated first (by day), then someday
+    open.sort(function(a,b){ var ad=a.day||"9999", bd=b.day||"9999"; return ad<bd?-1:ad>bd?1:0; });
+    open=open.slice(0,90);
+    if(!open.length) return "(no open tasks yet)";
+    return open.map(function(k){ var p=k.projectId?proj(k.projectId):null;
+      return "["+k.id+"] "+k.title+" — "+(k.day?(k.day===t?"today":k.day):"someday")+(k.block?"/"+k.block:"")+(k.at?" "+k.at:"")+(k.priority?" ★":"")+(p?" ("+p.name+")":""); }).join("\n");
+  }
+  function buildAIPrompt(blurb, withState){
     var names=S.projects.map(function(p){return p.name;}).join(", ")||"none yet";
     var profs=S.profiles.map(function(p){return p.name;}).join(", ")||"none yet";
+    if(withState){
+      return "You are helping me manage my personal planner app, Daybook. Below is my CURRENT open task list (each task has a stable [id]), then a brain-dump of what changed.\n\n"+
+        "MY CURRENT TASKS:\n"+currentTasksSnapshot()+"\n\n"+
+        "STEP 1 — Ask brief clarifying questions if needed (which task I mean, dates, etc.). Keep it short.\n\n"+
+        "STEP 2 — Reply with ONLY a single fenced ```json block. Use \"updates\" to change EXISTING tasks (reference them by their exact [id]), \"deletes\" to remove tasks by id, and the other arrays to ADD new items. Omit anything you have nothing for:\n"+
+        "```json\n{\n"+
+        "  \"updates\": [{\"id\": \"existing-id\", \"done\": true, \"day\": \"YYYY-MM-DD|someday\", \"block\": \"morning|afternoon|evening\", \"time\": \"HH:MM\", \"priority\": true, \"title\": \"new title\", \"notes\": \"string\"}],\n"+
+        "  \"deletes\": [\"existing-id\"],\n"+
+        "  \"tasks\": [{\"title\": \"string\", \"project\": \"string\", \"day\": \"YYYY-MM-DD\", \"block\": \"morning|afternoon|evening|anytime\", \"time\": \"HH:MM\", \"priority\": true, \"notes\": \"string\", \"subtasks\": [\"string\"]}],\n"+
+        "  \"events\": [{\"title\": \"string\", \"date\": \"YYYY-MM-DD\", \"project\": \"string\"}]\n"+
+        "}\n```\n\n"+
+        "Rules:\n- Today is "+today()+". Use real YYYY-MM-DD dates.\n"+
+        "- In \"updates\", include ONLY the fields that change. \"done\": true finishes a task; \"day\": \"someday\" removes its date. Only touch tasks I actually mention.\n"+
+        "- For brand-new tasks, use \"tasks\" (keep titles short — quick cues, not sentences).\n"+
+        "- \"project\" is a name; reuse one of mine if it fits ("+names+").\n"+
+        "- Don't invent or change anything I didn't say.\n\n"+
+        "My brain-dump:\n\"\"\"\n"+blurb+"\n\"\"\"";
+    }
     return "You are helping me fill in my personal planner app, Daybook. I'll give you a brain-dump below.\n\n"+
       "STEP 1 — Ask me a few brief clarifying questions for anything missing (dates, which project, priority, whether a task has sub-steps, job stage, who an email is from, etc.). Keep it short.\n\n"+
       "STEP 2 — After I answer, reply with ONLY a single fenced ```json code block in exactly this shape. Omit any field or array you have nothing for:\n"+
@@ -2977,7 +3117,7 @@
       "    \"subtasks\": [\"string\"]\n"+
       "  }],\n"+
       "  \"events\": [{\"title\": \"string\", \"date\": \"YYYY-MM-DD\", \"project\": \"string\"}],\n"+
-      "  \"jobs\": [{\"company\": \"string\", \"role\": \"string\", \"stage\": \"Saved|Applied|Interviewing|Offer|Closed\", \"next\": \"string\", \"link\": \"string\", \"notes\": \"string\"}],\n"+
+      "  \"jobs\": [{\"company\": \"string\", \"role\": \"string\", \"stage\": \"Saved|Applied|Interviewing|Offer|Closed\", \"next\": \"string\", \"nextDate\": \"YYYY-MM-DD\", \"checklist\": [\"string\"], \"link\": \"string\", \"notes\": \"string\"}],\n"+
       "  \"emails\": [{\"subject\": \"string\", \"sender\": \"string\"}],\n"+
       "  \"notes\": [\"string\"]\n"+
       "}\n```\n\n"+
@@ -3028,6 +3168,10 @@
     arr(d.jobs).forEach(function(j){ if(j&&j.company) items.push("<b>Job:</b> "+esc(String(j.company))+(j.role?" — "+esc(String(j.role)):"")); });
     arr(d.emails).forEach(function(e){ if(e&&e.subject) items.push("<b>Email:</b> "+esc(String(e.subject))); });
     arr(d.notes).forEach(function(nt){ if(nt) items.push("<b>Note:</b> "+esc(String(nt).slice(0,80))+(String(nt).length>80?"…":"")); });
+    arr(d.updates).forEach(function(u){ if(!u||!u.id)return; var k=S.tasks.find(function(x){return x.id===u.id;}); if(!k)return;
+      var ch=[]; if(u.done===true)ch.push("✓ done"); if(u.done===false)ch.push("reopen"); if("day" in u)ch.push("→ "+(u.day&&validDate(u.day)?niceDate(u.day):"someday")); if(u.block)ch.push(u.block); if(parseTimeAI(u.time))ch.push("🕒 "+u.time); if(u.priority===true)ch.push("★"); if(u.priority===false)ch.push("unstar"); if(u.title)ch.push("rename"); if(u.notes)ch.push("note");
+      items.push('<b>Update:</b> '+esc(k.title.slice(0,40))+" — "+esc(ch.join(", ")||"(no change)")); });
+    arr(d.deletes).forEach(function(id){ var k=S.tasks.find(function(x){return x.id===id;}); if(k) items.push('<b>Delete:</b> '+esc(k.title.slice(0,50))); });
     if(!items.length){ toast("Nothing to import in that reply"); return; }
     modal('<h3>Import from Claude</h3><p class="sub">'+items.length+' item'+(items.length===1?"":"s")+' will be added. Nothing changes until you confirm.</p>'+
       '<div class="card" style="font-size:13.5px;line-height:1.7;max-height:45vh;overflow:auto">'+items.map(function(c){return "• "+c;}).join("<br>")+'</div>'+
@@ -3054,10 +3198,22 @@
       var at=parseTimeAI(k.time); if(at&&!bl) bl=blockForTime(at);
       S.tasks.push({id:uid(),title:String(k.title),projectId:pid,status:"todo",day:dayVal,block:bl,at:at,priority:!!k.priority,rollover:0,notes:k.notes?plainToHtml(String(k.notes)):null,subs:aiSubs(k.subtasks),created:t}); n++; });
     (d.events||[]).forEach(function(ev){ if(!ev||!ev.title||!validDate(ev.date))return; var pid=ev.project?projByName(ev.project,ev.profile).id:null; S.events.push({id:uid(),title:String(ev.title),date:validDate(ev.date),projectId:pid,source:"ai"}); n++; });
-    (d.jobs||[]).forEach(function(j){ if(!j||!j.company)return; var st=JOB_STAGES.indexOf(j.stage)>=0?j.stage:"Saved"; S.jobs.push({id:uid(),company:String(j.company),role:j.role||"",stage:st,next:j.next||"",link:j.link||"",notes:j.notes||""}); n++; });
+    (d.jobs||[]).forEach(function(j){ if(!j||!j.company)return; var st=JOB_STAGES.indexOf(j.stage)>=0?j.stage:"Saved"; S.jobs.push({id:uid(),company:String(j.company),role:j.role||"",stage:st,next:j.next||"",nextDate:validDate(j.nextDate),link:j.link||"",notes:j.notes||"",checklist:aiSubs(j.checklist).map(function(s){return {id:s.id,text:s.text,done:false};})}); n++; });
     (d.emails||[]).forEach(function(e){ if(!e||!e.subject)return; S.emails.unshift({id:uid(),subject:String(e.subject),sender:e.sender||"",done:false,created:t}); n++; });
     (d.notes||[]).forEach(function(nt){ if(!nt)return; S.notes[t]=(S.notes[t]?S.notes[t]+"<br>":"")+plainToHtml(String(nt)); n++; });
-    ensureOrd(); fillProjSelect(); save(); toast("Added "+n+" item"+(n===1?"":"s")+" from Claude");
+    // ---- edits to EXISTING tasks (Phase 5: let Claude update my plan) ----
+    (d.updates||[]).forEach(function(u){ if(!u||!u.id)return; var k=S.tasks.find(function(x){return x.id===u.id;}); if(!k)return;
+      if(u.done===true && k.status!=="done"){ k.status="done"; k.completedOn=t; }
+      if(u.done===false && k.status==="done"){ k.status="todo"; k.completedOn=null; }
+      if("day" in u){ if(u.day===null||String(u.day).toLowerCase()==="someday") k.day=null; else if(validDate(u.day)){ k.day=u.day; k.rollover=0; } }
+      if(["morning","afternoon","evening"].indexOf(u.block)>=0) k.block=u.block;
+      if(parseTimeAI(u.time)){ k.at=parseTimeAI(u.time); if(!k.block) k.block=blockForTime(k.at); }
+      if(typeof u.priority==="boolean") k.priority=u.priority;
+      if(u.title) k.title=String(u.title);
+      if(u.notes) k.notes=plainToHtml(String(u.notes));
+      n++; });
+    (d.deletes||[]).forEach(function(id){ var i=S.tasks.findIndex(function(x){return x.id===id;}); if(i>=0){ S.tasks.splice(i,1); n++; } });
+    ensureOrd(); fillProjSelect(); save(); toast("Applied "+n+" change"+(n===1?"":"s")+" from Claude");
   }
   /* ---------- global search ---------- */
   function openSearchModal(){
@@ -3332,6 +3488,12 @@
     S.events.forEach(function(ev){ if(!ev.date || ev.date<horizon) return;
       L.push("BEGIN:VEVENT","UID:ev-"+ev.id+"@daybook","DTSTART;VALUE=DATE:"+ev.date.replace(/-/g,""),"SUMMARY:"+icsEsc(ev.title));
       if(alarms){ L.push("BEGIN:VALARM","ACTION:DISPLAY","DESCRIPTION:"+icsEsc(ev.title),"TRIGGER;RELATED=START:PT8H","END:VALARM"); }
+      L.push("END:VEVENT");
+    });
+    S.jobs.forEach(function(j){ if(!j.nextDate || j.nextDate<horizon || (j.stage==="Closed")) return;
+      var sum="Follow up: "+(j.company||"job")+(j.next?" — "+j.next:"");
+      L.push("BEGIN:VEVENT","UID:job-"+j.id+"@daybook","DTSTART;VALUE=DATE:"+j.nextDate.replace(/-/g,""),"SUMMARY:"+icsEsc(sum));
+      if(alarms){ L.push("BEGIN:VALARM","ACTION:DISPLAY","DESCRIPTION:"+icsEsc(sum),"TRIGGER;RELATED=START:PT8H","END:VALARM"); }
       L.push("END:VEVENT");
     });
     L.push("END:VCALENDAR");
