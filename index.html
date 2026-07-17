@@ -64,9 +64,21 @@
   .sb-brand{ display:flex; align-items:center; gap:8px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; font-size:12px; color:var(--ink); padding:4px 6px 0; }
   .sb-brand .sb-act{ margin-left:auto; background:none; border:none; color:var(--ink-faint); cursor:pointer; font-size:11.5px; font-weight:700; font-family:inherit; }
   .sb-brand .sb-act:hover{ color:var(--terra-deep); }
+  #rightbar{ position:fixed; right:0; top:0; bottom:0; width:300px; z-index:45; background:var(--sheet); border-left:1.5px solid var(--line); padding:14px 12px 20px; overflow:auto; display:flex; flex-direction:column; gap:14px; transition:transform .2s ease; }
+  body.rb-closed #rightbar{ transform:translateX(102%); }
+  .rb-brand{ display:flex; align-items:center; gap:8px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; font-size:12px; color:var(--ink); padding:4px 6px 0; }
+  .rb-brand .sb-act{ margin-left:auto; background:none; border:none; color:var(--ink-faint); cursor:pointer; font-size:11.5px; font-weight:700; font-family:inherit; }
+  .rb-brand .sb-act:hover{ color:var(--terra-deep); }
+  #rb-scrim{ display:none; }
   @media (min-width:1001px){
-    .appbar, .wrap{ margin-left:240px; transition:margin-left .2s ease; }
+    .appbar, .wrap{ margin-left:240px; margin-right:0; transition:margin .2s ease; }
     body.sb-closed .appbar, body.sb-closed .wrap{ margin-left:0; }
+    body:not(.rb-closed) .appbar, body:not(.rb-closed) .wrap{ margin-right:300px; }
+  }
+  @media (max-width:1000px){
+    #rightbar{ transform:translateX(102%); border-radius:18px 0 0 18px; box-shadow:0 0 60px rgba(0,0,0,.35); z-index:56; }
+    body.rb-open #rightbar{ transform:translateX(0); }
+    body.rb-open #rb-scrim{ display:block; position:fixed; inset:0; z-index:55; background:rgba(20,18,24,.4); }
   }
   .sb-card{ background:var(--card); border:1.5px solid var(--line); border-radius:14px; padding:10px; }
   .sb-h{ font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-soft); font-weight:700; margin:2px 6px 8px; display:flex; align-items:center; }
@@ -537,6 +549,7 @@
     <button class="icon-btn" id="cap-btn" title="Capture with Claude" aria-label="Capture with Claude">✨</button>
     <button class="icon-btn" id="theme-btn" title="Toggle light / dark" aria-label="Toggle theme">◐</button>
     <button class="icon-btn" id="menu-btn" title="Backup, import, help" aria-label="More">⋯</button>
+    <button class="icon-btn" id="rb-toggle" title="Backlog & log panel" aria-label="Toggle the backlog and log panel">📋</button>
   </div>
 </div>
 
@@ -554,7 +567,9 @@
   </div>
 </div>
 
+<aside id="rightbar" aria-label="Backlog and log"></aside>
 <div id="sb-scrim"></div>
+<div id="rb-scrim"></div>
 <div id="modal-root"></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
@@ -822,6 +837,7 @@
     else if(view==="hub") m.innerHTML=viewHub();
     else if(view==="people") m.innerHTML=viewPeople();
     renderSidebar();
+    renderRightbar();
     renderGlobalHead();
     bind();
     if(lastRenderedView!==view){ m.classList.remove("anim"); void m.offsetWidth; m.classList.add("anim"); lastRenderedView=view; }
@@ -905,6 +921,10 @@
     else document.body.classList.toggle("sb-open");
   };
   document.getElementById("sb-scrim").onclick=function(){ document.body.classList.remove("sb-open"); };
+  function applyRightbarState(){ document.body.classList.toggle("rb-closed", !S.panelOpen); }
+  function toggleRightbar(){ if(window.innerWidth>1000){ S.panelOpen=!S.panelOpen; save(); applyRightbarState(); } else document.body.classList.toggle("rb-open"); }
+  document.getElementById("rb-toggle").onclick=toggleRightbar;
+  document.getElementById("rb-scrim").onclick=function(){ document.body.classList.remove("rb-open"); };
   function renderGlobalHead(){
     var el=document.getElementById("global-head"); if(!el) return;
     el.innerHTML=(S.name?'<span class="gh-name">'+esc(S.name)+'</span>':'<button class="chip" id="gh-setname" style="padding:3px 11px">👋 Add your name</button>')+
@@ -1056,12 +1076,12 @@
       (isToday&&streak>=2?'<span class="streak-pill" title="Days in a row with at least one task done">🔥 '+streak+'-day streak</span>':"")+
       (scopeActive()?'<button class="chip" data-act="clearscope" title="Showing a filtered slice — tap to show everything" style="background:var(--warn-bg);border-color:var(--warn-bg);color:var(--warn)">🔍 '+esc(scopeLabel())+' ✕</button>':'')+
       '<button class="chip" style="margin-left:auto" data-act="'+(bulkMode?'bulk-exit':'bulk-enter')+'" aria-pressed="'+bulkMode+'">'+(bulkMode?'✕ Done selecting':'☑ Select')+'</button>'+
-      '<button class="chip" data-act="panel-toggle" aria-pressed="'+!!S.panelOpen+'">📋 '+(S.panelOpen?"Hide":"Show")+' log'+(doneCount?' · '+doneCount+' done':'')+'</button>'+
+      '<button class="chip" data-act="panel-toggle" aria-pressed="'+!!S.panelOpen+'" title="Backlog & log panel">📋 '+(S.panelOpen?"Hide":"Show")+' panel'+(doneCount?' · '+doneCount+' done':'')+'</button>'+
       '</div>'+
       '<p class="sub"'+(total?' style="margin-bottom:0"':'')+'>'+status+'</p>'+
       (total?'<div class="day-prog" aria-hidden="true"><span style="width:'+Math.round(100*doneCount/total)+'%"></span></div>':"");
 
-    html+='<div class="today-flex"><div class="today-main">';
+    html+='<div class="today-main">';
     if(isToday) html+=spuCourseDashboardHtml();
 
     if(sugg.length){
@@ -1106,18 +1126,14 @@
       focus: fold("focus",(isToday?"Today\'s focus":"Focus — "+niceDate(vd)),'<ul class="tasks" data-list="focus">'+focusItems.map(focusRow).join("")+inlineAddRowFocus("What matters most "+(isToday?"today":"that day")+"…")+'</ul>',foldProg(focusDone,focusItems.length)),
       tasks: fold("tasks","Tasks",'<ul class="tasks" data-list="master">'+master.map(taskLi).join("")+inlineAddRow("master","Add a task — try @project @morning, or “tomorrow”…")+'</ul>',foldProg(doneCount,total)),
       blocks: blocksHtml,
-      anytime: fold("anytime","⏳ Anytime",'<ul class="tasks" data-list="loose">'+anytime.map(taskLi).join("")+inlineAddRow("loose","Add for anytime — no set time…")+'</ul>',foldProg(doneA,anytime.length+doneA)),
-      someday: fold("someday","💭 Someday",'<ul class="tasks" data-list="someday">'+someday.map(taskLi).join("")+inlineAddRow("someday","Add for later — no date…")+'</ul>',foldProg(somedayDone,someday.length+somedayDone)),
       habitsnotes: '<div class="grid2">'+fold("habits","Habits &amp; wellness",hb,foldProg(habitDone,habitTotal))+fold("notes","Notes",richTextHtml("daily",S.notes[vd]||"","Jot anything — ideas, blockers, wins…",110))+'</div>'
     };
-    var DEF_UNITS=["focus","tasks","blocks","anytime","someday","habitsnotes"];
+    var DEF_UNITS=["focus","tasks","blocks","habitsnotes"];
     var uorder=(S.todayOrder&&S.todayOrder.length)?S.todayOrder.slice():DEF_UNITS.slice();
     DEF_UNITS.forEach(function(k){ if(uorder.indexOf(k)<0) uorder.push(k); });
     uorder=uorder.filter(function(k){ return units[k]!==undefined; });
     uorder.forEach(function(key){ html+='<div class="today-unit" data-unit="'+key+'" draggable="true"><span class="unit-grip" title="Drag to reorder this section">⠿ drag</span>'+units[key]+'</div>'; });
     html+='</div>'; // today-main
-    if(S.panelOpen) html+=sidePanelHtml(vd);
-    html+='</div>'; // today-flex
     if(bulkMode){
       var n=bulkCount();
       html+='<div class="bulk-bar"><b>'+n+' selected</b>'+
@@ -1145,10 +1161,21 @@
   }
 
   /* completed + carried log — the hideable side panel */
-  function sidePanelHtml(vd){
+  function backlogSideRow(k){
+    var p=proj(k.projectId);
+    return '<div class="panel-task" data-id="'+k.id+'"><div class="task-main" data-act="edit" title="Tap to edit"><div class="task-title" style="font-size:13.5px">'+esc(k.title)+'</div>'+
+      (p?'<div class="task-meta"><span class="pill proj" style="background:'+p.color+'">'+esc(p.name)+'</span></div>':"")+'</div>'+
+      '<div class="panel-move"><button data-act="sched" data-id="'+k.id+'" data-d="'+today()+'">📅 Today</button><button data-act="sched" data-id="'+k.id+'" data-d="'+addDays(today(),1)+'">→ Tmrw</button><button data-act="sched" data-id="'+k.id+'" data-d="pick">📅…</button></div></div>';
+  }
+  function renderRightbar(){
+    var rb=document.getElementById("rightbar"); if(!rb) return;
+    var vd=(view==="today")?viewDay:today();
+    var backlog=orderTasks(S.tasks.filter(function(k){return !k.day && k.status!=="done" && inScope(k.projectId);}),false);
     var carried=S.tasks.filter(function(k){return k.status==="todo" && (k.rollover||0)>=1 && inScope(k.projectId);});
     var doneV=S.tasks.filter(function(k){return k.status==="done" && k.completedOn===vd && inScope(k.projectId);});
     var MOVES=[["morning","☀️ Morning"],["afternoon","🌤 Afternoon"],["evening","🌙 Evening"],["anytime","⏳ Anytime"],["someday","💭 Someday"]];
+    var blAdd='<ul class="tasks" data-list="someday" style="padding:0;margin:0 0 4px"><li class="task inline-row" style="padding:6px 4px"><span class="inline-plus">+</span><input class="inline-add" data-block="someday" placeholder="Add to backlog…" aria-label="Add to backlog"/></li></ul>';
+    var blBody=blAdd+(backlog.length?backlog.map(backlogSideRow).join(""):'<div class="empty">Backlog is empty</div>');
     var cb=carried.length?carried.map(function(k){
       var p=proj(k.projectId);
       return '<div class="panel-task" data-id="'+k.id+'"><div class="task-main" data-act="edit" title="Tap to edit"><div class="task-title" style="font-size:13.5px">'+esc(k.title)+'</div>'+
@@ -1163,11 +1190,11 @@
       return '<div class="log-day" data-act="panel-goday" data-d="'+d+'" title="View this day">'+niceDate(d)+' · '+byDay[d].length+'</div>'+
         byDay[d].map(function(k){return '<div class="log-item">✓ '+esc(k.title)+'</div>';}).join("");
     }).join(""):'<div class="empty">No completed tasks yet</div>';
-    return '<aside class="side-panel">'+
+    rb.innerHTML='<div class="rb-brand">📋 Panel<button class="sb-act" data-act="panel-toggle" title="Hide the panel">hide ⟩</button></div>'+
+      fold("panel-backlog","🗃 Backlog"+(backlog.length?" · "+backlog.length:""),blBody)+
       fold("panel-carried","⏳ Carried over"+(carried.length?" · "+carried.length:""),cb)+
       fold("panel-done","✓ Completed"+(doneV.length?" · "+doneV.length:""),db)+
-      fold("panel-log","🗂 Completed log",lb)+
-      '</aside>';
+      fold("panel-log","🗂 Completed log",lb);
   }
 
   function spuCourseDashboardHtml(){ return ""; }
@@ -1520,8 +1547,11 @@
       else if(e.target.dataset.focus){ addFocusItem(e.target.value); } else { addTaskInline(e.target.value, e.target.dataset.block); } } };
     if(pendingSubAdd){ var psi=v.querySelector('.inline-add[data-subfor="'+pendingSubAdd+'"],.inline-add[data-fsubfor="'+pendingSubAdd+'"]');
       if(psi){ psi.focus(); psi.onblur=function(){ if(!psi.value.trim()&&pendingSubAdd){ pendingSubAdd=null; render(); } }; } }
-    if(pendingFocus){ var pf=pendingFocus==="focus" ? v.querySelector('.inline-add[data-focus="1"]') : v.querySelector('.inline-add[data-block="'+pendingFocus+'"]'); pendingFocus=null; if(pf){ pf.focus(); } }
+    if(pendingFocus){ var psel=pendingFocus==="focus" ? '.inline-add[data-focus="1"]' : '.inline-add[data-block="'+pendingFocus+'"]'; var pf=v.querySelector(psel)||document.querySelector("#rightbar "+psel); pendingFocus=null; if(pf){ pf.focus(); } }
     v.querySelectorAll("details.fold").forEach(function(d){ d.addEventListener("toggle",function(){ S.collapsed[d.dataset.fold]=!d.open; save(); }); });
+    var rbEl=document.getElementById("rightbar");
+    if(rbEl){ rbEl.onkeydown=v.onkeydown;
+      rbEl.querySelectorAll("details.fold").forEach(function(d){ d.addEventListener("toggle",function(){ S.collapsed[d.dataset.fold]=!d.open; save(); }); }); }
     updateClock();
     wireRTE(v);
     var dailyBody=v.querySelector('.rte[data-rte-id="daily"] .rte-body');
@@ -1567,7 +1597,7 @@
     v.ondrop=function(e){
       if(dragUnitKey){ var u=e.target.closest(".today-unit[data-unit]");
         if(u && u.dataset.unit!==dragUnitKey){ e.preventDefault();
-          var DEF=["focus","tasks","blocks","anytime","someday","habitsnotes"];
+          var DEF=["focus","tasks","blocks","habitsnotes"];
           var ord=(S.todayOrder&&S.todayOrder.length)?S.todayOrder.slice():DEF.slice();
           DEF.forEach(function(k){ if(ord.indexOf(k)<0) ord.push(k); });
           ord=ord.filter(function(k){ return DEF.indexOf(k)>=0; });
@@ -1620,7 +1650,7 @@
       else if(act==="fsub-add"){ pendingSubAdd=(id||anyId); render(); }
       else if(act==="fsub-toggle"){ var ff=(S.focus[viewDay]||[]).find(function(x){return x.id===(id||anyId);}); if(ff){ var fsb=(ff.subs||[]).find(function(x){return x.id===a.dataset.sid;}); if(fsb){ fsb.done=!fsb.done; save(); render(); } } }
       else if(act==="daynav"){ var dd0=+a.dataset.d; viewDay = dd0===0?today():addDays(viewDay,dd0); render(); }
-      else if(act==="panel-toggle"){ S.panelOpen=!S.panelOpen; save(); render(); }
+      else if(act==="panel-toggle"){ toggleRightbar(); render(); }
       else if(act==="panel-goday"){ viewDay=a.dataset.d; view="today"; syncNav(); render(); window.scrollTo({top:0,behavior:"smooth"}); }
       else if(act==="sched"){ var sk=S.tasks.find(function(x){return x.id===a.dataset.id;}); if(sk){ if(a.dataset.d==="pick"){ openDatePickModal(sk); } else { sk.day=a.dataset.d; sk.rollover=0; save(); render(); toast(a.dataset.d===today()?"Scheduled for today":"Scheduled for "+niceDate(a.dataset.d)); } } }
       else if(act==="panel-move"){ var mk=S.tasks.find(function(x){return x.id===a.dataset.id;}); if(mk){ var to=a.dataset.to;
@@ -1700,6 +1730,7 @@
       else if(act==="tpl-pause"){ var tp1=S.templates.find(function(x){return x.id===a.dataset.tid;}); if(tp1){ tp1.paused=!tp1.paused; save(); render(); toast(tp1.paused?"Paused — no new copies":"Resumed"); } }
       else if(act==="tpl-del"){ var ti=S.templates.findIndex(function(x){return x.id===a.dataset.tid;}); if(ti>=0){ var tdel=S.templates[ti]; S.templates.splice(ti,1); save(); render(); toastUndo("Repeat removed",function(){ S.templates.splice(Math.min(ti,S.templates.length),0,tdel); save(); render(); }); } }
     };
+    var rbEl2=document.getElementById("rightbar"); if(rbEl2) rbEl2.onclick=v.onclick;
   }
   function toggleTask(id){ var k=S.tasks.find(function(x){return x.id===id;}); if(!k)return;
     k.status=k.status==="done"?"todo":"done"; k.completedOn=k.status==="done"?(view==="today"?viewDay:today()):null; save(); render(); }
@@ -3262,6 +3293,7 @@
   setInterval(updateClock,1000);
   fillProjSelect();
   applySidebarState();
+  applyRightbarState();
   onOpen();
   render();
   refreshCalendars(function(){ if(view==="calendar") render(); });
