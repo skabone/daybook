@@ -236,6 +236,11 @@
   .tl-track{ position:relative; flex:1; height:26px; background:var(--line-soft); border-radius:8px; }
   .tl-bar{ position:absolute; top:3px; height:20px; border-radius:7px; color:#fff; font-size:11px; font-weight:700; padding:2px 8px; overflow:hidden; white-space:nowrap; display:flex; align-items:center; }
   .tl-today{ position:absolute; top:-4px; bottom:-4px; width:2px; background:var(--terra); }
+  .tl-dot{ position:absolute; top:4px; width:15px; height:15px; border-radius:50%; transform:translateX(-7px); cursor:pointer; color:#fff; font-size:9px; font-weight:800; display:flex; align-items:center; justify-content:center; box-shadow:0 1px 3px rgba(0,0,0,.35); border:1.5px solid var(--card); z-index:2; }
+  .tl-dot:hover{ transform:translateX(-7px) scale(1.25); }
+  .tl-ev{ position:absolute; top:6px; width:11px; height:11px; background:var(--slate); transform:translateX(-6px) rotate(45deg); z-index:2; }
+  .tl-legend{ display:flex; gap:16px; flex-wrap:wrap; font-size:11.5px; color:var(--ink-soft); margin:2px 0 10px; }
+  .tl-legend span{ display:inline-flex; align-items:center; gap:5px; }
 
   /* modal */
   .scrim{ position:fixed; inset:0; background:rgba(20,18,24,.5); z-index:50; display:flex; align-items:center; justify-content:center; padding:16px; }
@@ -510,6 +515,7 @@
       <button data-view="hub">Hub</button>
       <button data-view="today" aria-current="true">Today</button>
       <button data-view="week">Week</button>
+      <button data-view="backlog">Backlog</button>
       <button data-view="projects">Projects</button>
       <button data-view="people">People</button>
       <button data-view="calendar">Calendar</button>
@@ -799,6 +805,7 @@
     var m=document.getElementById("view");
     if(view==="today") m.innerHTML=viewToday();
     else if(view==="week") m.innerHTML=viewWeek();
+    else if(view==="backlog") m.innerHTML=viewBacklog();
     else if(view==="projects") m.innerHTML=viewProjects();
     else if(view==="calendar") m.innerHTML=viewCalendar();
     else if(view==="timeline") m.innerHTML=viewTimeline();
@@ -840,10 +847,12 @@
     var openCnt=function(pid){ return S.tasks.filter(function(k){return k.projectId===pid&&k.status==="todo";}).length; };
     var profCnt=function(prid){ return S.projects.filter(function(p){return p.profileId===prid;}).reduce(function(n,p){return n+openCnt(p.id);},0); };
     var todayOpen=S.tasks.filter(function(k){return k.day===today()&&k.status!=="done"&&inScope(k.projectId);}).length;
-    var VIEWS=[["today","📅","Today"],["week","📆","Week"],["hub","✨","Hub"],["projects","🗂","Projects"],["people","👥","People"],["calendar","🗓","Calendar"],["timeline","📈","Timeline"]];
+    var backlogOpen=S.tasks.filter(function(k){return !k.day&&k.status!=="done"&&inScope(k.projectId);}).length;
+    var VIEWCNT={today:todayOpen, backlog:backlogOpen};
+    var VIEWS=[["today","📅","Today"],["week","📆","Week"],["backlog","🗃","Backlog"],["hub","✨","Hub"],["projects","🗂","Projects"],["people","👥","People"],["calendar","🗓","Calendar"],["timeline","📈","Timeline"]];
     var h='<div class="sb-brand">📔 Daybook<button class="sb-act" data-sb="collapse" title="Hide the sidebar">⟨ hide</button></div>';
     h+='<div class="sb-card"><div class="sb-h">Views</div>'+VIEWS.map(function(v){
-      return '<button class="sb-row" data-sb="view" data-v="'+v[0]+'" aria-pressed="'+(view===v[0])+'">'+v[1]+'<span class="sb-name">'+v[2]+'</span>'+(v[0]==="today"&&todayOpen?'<span class="cnt">'+todayOpen+'</span>':"")+'</button>';
+      return '<button class="sb-row" data-sb="view" data-v="'+v[0]+'" aria-pressed="'+(view===v[0])+'">'+v[1]+'<span class="sb-name">'+v[2]+'</span>'+(VIEWCNT[v[0]]?'<span class="cnt">'+VIEWCNT[v[0]]+'</span>':"")+'</button>';
     }).join("")+'</div>';
     var favCnt=S.projects.filter(function(p){return p.fav;}).length;
     h+='<div class="sb-card"><div class="sb-h">Profiles<button class="sb-act" data-sb="newprofile">+ new</button></div>';
@@ -1204,6 +1213,39 @@
     return html;
   }
 
+  /* ---------- BACKLOG — undated tasks you schedule when ready (Structured-style) ---------- */
+  function backlogRow(k){
+    var p=proj(k.projectId);
+    var pills=(k.priority?'<span class="pill imp">★</span>':"")+(p?'<span class="pill proj" style="background:'+p.color+'">'+esc(p.name)+'</span>':"")+
+      (k.subs&&k.subs.length?'<span class="pill subs-n">☑ '+k.subs.filter(function(s){return s.done;}).length+'/'+k.subs.length+'</span>':"");
+    var chips='<button data-act="sched" data-id="'+k.id+'" data-d="'+today()+'">📅 Today</button>'+
+      '<button data-act="sched" data-id="'+k.id+'" data-d="'+addDays(today(),1)+'">→ Tomorrow</button>';
+    for(var i=2;i<=6;i++){ var dd=addDays(today(),i); chips+='<button data-act="sched" data-id="'+k.id+'" data-d="'+dd+'">'+DOWNAMES[dow(dd)]+' '+(+dd.slice(8))+'</button>'; }
+    chips+='<button data-act="sched" data-id="'+k.id+'" data-d="pick">📅 Date…</button>';
+    return '<div class="panel-task" data-id="'+k.id+'">'+
+      '<div style="display:flex;gap:11px;align-items:flex-start"><button class="chk" data-act="toggle" aria-label="Complete" aria-pressed="false"></button>'+
+      '<div class="task-main" data-act="edit" style="flex:1" title="Tap to edit"><div class="task-title">'+esc(k.title)+'</div>'+(pills?'<div class="task-meta">'+pills+'</div>':"")+'</div>'+
+      '<button class="task-star '+(k.priority?"on":"")+'" data-act="star" aria-label="Important">'+(k.priority?"★":"☆")+'</button>'+
+      '<button class="task-x" data-act="del" aria-label="Delete" style="opacity:1">✕</button></div>'+
+      '<div class="panel-move" style="margin-left:31px">'+chips+'</div></div>';
+  }
+  function viewBacklog(){
+    var undated=orderTasks(S.tasks.filter(function(k){return !k.day && k.status!=="done" && inScope(k.projectId);}),false);
+    var html='<h2 class="view-h">Backlog</h2><p class="sub">Things to do <b>someday</b> — no set date. Add them here, then schedule each one for a day when you\'re ready.'+(scopeActive()?' <b>Filtered:</b> '+esc(scopeLabel())+' — <button class="chip" data-act="clearscope" style="padding:2px 9px">show all</button>':'')+'</p>';
+    html+='<div class="card" style="margin-bottom:16px"><ul class="tasks" data-list="someday" style="padding:0"><li class="task inline-row"><span class="inline-plus">+</span><input class="inline-add" data-block="someday" placeholder="Add something to do someday — @project works too…" aria-label="Add backlog task"/></li></ul></div>';
+    if(!undated.length){ html+='<div class="card empty" style="padding:34px">Your backlog is empty. Anything without a deadline lands here.</div>'; return html; }
+    // group by project for scannability
+    var byProj={}; undated.forEach(function(k){ var key=k.projectId||"__none"; (byProj[key]=byProj[key]||[]).push(k); });
+    var order=S.projects.filter(function(p){return byProj[p.id];}).map(function(p){return p.id;});
+    if(byProj.__none) order.push("__none");
+    order.forEach(function(key){
+      var p=key==="__none"?null:proj(key);
+      html+='<div class="block-head"><p class="label">'+(p?'<span style="color:'+p.color+'">●</span> '+esc(p.name):"No project")+'</p><span class="cnt">'+byProj[key].length+'</span></div>';
+      html+='<div class="card" style="margin-bottom:14px">'+byProj[key].map(backlogRow).join("")+'</div>';
+    });
+    return html;
+  }
+
   /* ---------- PROJECTS ---------- */
   function viewProjects(){
     var html='<h2 class="view-h">Projects</h2><p class="sub">Every task across every day, grouped by project.'+(scopeActive()?' <b>Filtered:</b> '+esc(scopeLabel())+' — <button class="chip" data-act="clearscope" style="padding:2px 9px">show all</button>':'')+'</p>';
@@ -1336,12 +1378,19 @@
   /* ---------- TIMELINE ---------- */
   function viewTimeline(){
     var tv=S.tlView||"months";
-    var html='<h2 class="view-h">Timeline</h2><p class="sub">Long-term view — each bar is a project phase. Add phases from the Projects tab.'+(scopeActive()?' <b>Filtered:</b> '+esc(scopeLabel())+' — <button class="chip" data-act="clearscope" style="padding:2px 9px">show all</button>':'')+'</p>';
-    html+='<div class="chips" style="margin-bottom:14px">'+[["months","Months"],["weeks","Weeks"],["days","Days"]].map(function(v){return '<button class="chip" data-act="tlview" data-v="'+v[0]+'" aria-pressed="'+(tv===v[0])+'">'+v[1]+'</button>';}).join("")+'</div>';
-    if(!S.phases.length){ html+='<div class="card empty" style="padding:40px">No phases yet. Go to <b>Projects</b> → “+ phase” to map out project stages across weeks.</div>'; return html; }
-    var starts=S.phases.map(function(p){return p.start;}).concat([today()]);
-    var ends=S.phases.map(function(p){return p.end;}).concat([today()]);
-    var min=starts.sort()[0], max=ends.sort()[ends.length-1];
+    var html='<h2 class="view-h">Timeline</h2><p class="sub">Your scheduled work over time — project phases (bars), tasks (dots), and events (◆). It fills in automatically from your tasks.'+(scopeActive()?' <b>Filtered:</b> '+esc(scopeLabel())+' — <button class="chip" data-act="clearscope" style="padding:2px 9px">show all</button>':'')+'</p>';
+    html+='<div class="chips" style="margin-bottom:8px">'+[["months","Months"],["weeks","Weeks"],["days","Days"]].map(function(v){return '<button class="chip" data-act="tlview" data-v="'+v[0]+'" aria-pressed="'+(tv===v[0])+'">'+v[1]+'</button>';}).join("")+'</div>';
+    html+='<div class="tl-legend"><span>▬ phase</span><span>● task (number = count; click to open the day)</span><span>◆ event</span><span style="color:var(--terra-deep)">▏ today</span></div>';
+    var datedTasks=S.tasks.filter(function(k){ return k.day && k.status!=="done" && inScope(k.projectId); });
+    var scopedPhases=S.phases.filter(function(ph){ return inScope(ph.projectId); });
+    var scopedEvents=S.events.filter(function(ev){ return ev.date && sourceEnabled(ev) && !(ev.projectId&&!inScope(ev.projectId)); });
+    if(!datedTasks.length && !scopedPhases.length && !scopedEvents.length){ html+='<div class="card empty" style="padding:40px">Nothing scheduled yet. Give tasks a date (or add project phases) and they\'ll appear here across time.</div>'; return html; }
+    var dates=[today()];
+    scopedPhases.forEach(function(ph){ dates.push(ph.start); dates.push(ph.end); });
+    datedTasks.forEach(function(k){ dates.push(k.day); });
+    scopedEvents.forEach(function(ev){ dates.push(ev.date); });
+    dates.sort();
+    var min=dates[0], max=dates[dates.length-1];
     min=addDays(min,-3); max=addDays(max,3);
     var span=Math.max(diffDays(max,min)+1,14);
     var PPD={months:6,weeks:18,days:34}[tv]||6;
@@ -1368,19 +1417,37 @@
     html+='<div class="tl-scroll"><div class="tl" style="min-width:'+(trackW+134)+'px">';
     html+='<div class="tl-months" style="margin-left:130px;width:'+trackW+'px">'+
       ticks.map(function(tk){return '<div class="tl-tick'+(tk.major?" major":"")+'" style="flex:0 0 '+tk.w+'px">'+tk.label+'</div>';}).join("")+'</div>';
-    // rows by project
+    // rows by project — phase bars + task dots + event diamonds
     var todayLeft=(today()>=min&&today()<=max)?diffDays(today(),min)*PPD:null;
+    function trackFor(color, phs, tasks, evs){
+      var track=(todayLeft!==null?'<div class="tl-today" style="left:'+todayLeft+'px"></div>':"");
+      (phs||[]).forEach(function(ph){
+        var left=diffDays(ph.start,min)*PPD, width=Math.max((diffDays(ph.end,ph.start)+1)*PPD,18);
+        track+='<div class="tl-bar" style="left:'+left+'px;width:'+width+'px;background:'+color+';opacity:.55" data-act="delphase" data-id="'+ph.id+'" title="'+esc(ph.title)+' · '+niceDate(ph.start)+' → '+niceDate(ph.end)+' — click to remove">'+esc(ph.title)+'</div>';
+      });
+      var byDay={}; (tasks||[]).forEach(function(k){ (byDay[k.day]=byDay[k.day]||[]).push(k); });
+      Object.keys(byDay).forEach(function(day){ var left=diffDays(day,min)*PPD; var n=byDay[day].length;
+        var titles=byDay[day].map(function(k){return (k.priority?"★ ":"")+k.title;}).join(" · ");
+        track+='<div class="tl-dot" style="left:'+left+'px;background:'+color+'" data-act="tl-day" data-d="'+day+'" title="'+esc(niceDate(day)+" — "+titles)+'">'+(n>1?n:'')+'</div>';
+      });
+      (evs||[]).forEach(function(ev){ var left=diffDays(ev.date,min)*PPD; track+='<div class="tl-ev" data-act="calday" data-d="'+ev.date+'" style="left:'+left+'px;cursor:pointer" title="'+esc(ev.title+" · "+niceDate(ev.date))+'"></div>'; });
+      return track;
+    }
     S.projects.forEach(function(p){
       if(!inScope(p.id)) return;
-      var phs=S.phases.filter(function(x){return x.projectId===p.id;});
-      if(!phs.length) return;
-      phs.forEach(function(ph){
-        var left=diffDays(ph.start,min)*PPD, width=Math.max((diffDays(ph.end,ph.start)+1)*PPD,18);
-        html+='<div class="tl-row"><div class="tl-name" title="'+esc(p.name)+'">'+esc(p.name)+'</div>'+
-          '<div class="tl-track" style="flex:0 0 '+trackW+'px">'+(todayLeft!==null?'<div class="tl-today" style="left:'+todayLeft+'px"></div>':"")+
-          '<div class="tl-bar" style="left:'+left+'px;width:'+width+'px;background:'+p.color+'" data-act="delphase" data-id="'+ph.id+'" title="'+esc(ph.title)+' · '+niceDate(ph.start)+' → '+niceDate(ph.end)+' — click to remove">'+esc(ph.title)+'</div></div></div>';
-      });
+      var phs=scopedPhases.filter(function(x){return x.projectId===p.id;});
+      var pt=datedTasks.filter(function(k){return k.projectId===p.id;});
+      var pe=scopedEvents.filter(function(ev){return ev.projectId===p.id;});
+      if(!phs.length && !pt.length && !pe.length) return;
+      html+='<div class="tl-row"><div class="tl-name" title="'+esc(p.name)+'">'+esc(p.name)+'</div>'+
+        '<div class="tl-track" style="flex:0 0 '+trackW+'px">'+trackFor(p.color,phs,pt,pe)+'</div></div>';
     });
+    var noneTasks=datedTasks.filter(function(k){return !k.projectId;});
+    var noneEvents=scopedEvents.filter(function(ev){return !ev.projectId;});
+    if(noneTasks.length||noneEvents.length){
+      html+='<div class="tl-row"><div class="tl-name" style="color:var(--ink-soft)">No project</div>'+
+        '<div class="tl-track" style="flex:0 0 '+trackW+'px">'+trackFor("var(--ink-faint)",[],noneTasks,noneEvents)+'</div></div>';
+    }
     html+='</div></div>';
     return html;
   }
@@ -1474,7 +1541,7 @@
       var taskEl=e.target.closest(".task"); var id=taskEl&&taskEl.dataset.id;
       var idEl=e.target.closest("[data-id]"); var anyId=idEl&&idEl.dataset.id;
       if(a.closest("summary")) e.preventDefault();
-      if(act==="toggle"){ toggleTask(id); }
+      if(act==="toggle"){ toggleTask(id||anyId); }
       else if(act==="edit"){ var tk=S.tasks.find(function(x){return x.id===(id||anyId);}); if(tk) openTaskModal({edit:tk}); }
       else if(act==="star"){ var tk2=S.tasks.find(function(x){return x.id===(id||anyId);}); if(tk2){ tk2.priority=!tk2.priority; save(); render(); } }
       else if(act==="calview"){ S.calView=a.dataset.v; save(); render(); }
@@ -1488,12 +1555,14 @@
       else if(act==="daynav"){ var dd0=+a.dataset.d; viewDay = dd0===0?today():addDays(viewDay,dd0); render(); }
       else if(act==="panel-toggle"){ S.panelOpen=!S.panelOpen; save(); render(); }
       else if(act==="panel-goday"){ viewDay=a.dataset.d; view="today"; syncNav(); render(); window.scrollTo({top:0,behavior:"smooth"}); }
+      else if(act==="sched"){ var sk=S.tasks.find(function(x){return x.id===a.dataset.id;}); if(sk){ if(a.dataset.d==="pick"){ openDatePickModal(sk); } else { sk.day=a.dataset.d; sk.rollover=0; save(); render(); toast(a.dataset.d===today()?"Scheduled for today":"Scheduled for "+niceDate(a.dataset.d)); } } }
       else if(act==="panel-move"){ var mk=S.tasks.find(function(x){return x.id===a.dataset.id;}); if(mk){ var to=a.dataset.to;
         if(to==="someday"){ mk.day=null; mk.block=null; }
         else if(to==="anytime"){ mk.day=viewDay; mk.block=null; mk.rollover=0; }
         else { mk.day=viewDay; mk.block=to; mk.rollover=0; }
         save(); render(); toast(to==="someday"?"Moved to Someday":"Moved to "+to); } }
       else if(act==="tlview"){ S.tlView=a.dataset.v; save(); render(); }
+      else if(act==="tl-day"){ viewDay=a.dataset.d; view="today"; syncNav(); render(); window.scrollTo({top:0,behavior:"smooth"}); }
       else if(act==="clearscope"){ S.filterProjects=[]; S.activeProfile="all"; save(); render(); toast("Showing everything"); }
       else if(act==="bulk-enter"){ bulkMode=true; bulkIds={}; render(); toast("Tap tasks to select them"); }
       else if(act==="bulk-exit"){ bulkMode=false; bulkIds={}; render(); }
@@ -1534,8 +1603,9 @@
       else if(act==="newperson"){ openPersonModal(); }
       else if(act==="editperson"){ openPersonModal(S.people.find(function(x){return x.id===anyId;})); }
       else if(act==="logtouch"){ var pp=S.people.find(function(x){return x.id===anyId;}); if(pp){ pp.last=today(); if(pp.cadence) pp.next=addDays(today(),pp.cadence); save(); render(); toast("Logged a touch"); } }
+      else if(act==="person-task"){ var ptp=S.people.find(function(x){return x.id===anyId;}); if(ptp) openTaskModal({title:ptp.name+": "}); }
       else if(act==="goMonth"){ S.calAnchor=a.dataset.m+"-01"; S.calView="month"; save(); render(); }
-      else if(act==="del"){ var di=S.tasks.findIndex(function(x){return x.id===id;}); if(di>=0){ var dt=S.tasks[di];
+      else if(act==="del"){ var delId=id||anyId; var di=S.tasks.findIndex(function(x){return x.id===delId;}); if(di>=0){ var dt=S.tasks[di];
         if(dt.tplId && S.templates.some(function(x){return x.id===dt.tplId;})){ openRecurDeleteModal(dt); return; }
         S.tasks.splice(di,1); save(); render(); toastUndo("Task deleted",function(){ S.tasks.splice(Math.min(di,S.tasks.length),0,dt); save(); render(); }); } }
       else if(act==="addblock"){ openTaskModal({block:a.dataset.block}); }
@@ -2442,6 +2512,12 @@
   };
 
   /* ---------- PEOPLE (follow-ups) ---------- */
+  function relatedTasks(person){
+    var terms=[norm(person.name)];
+    norm(person.name).split(/\s+/).forEach(function(w){ w=w.replace(/[^\w]/g,""); if(w.length>=4) terms.push(w); });
+    terms=terms.filter(Boolean);
+    return S.tasks.filter(function(k){ if(k.status==="done") return false; var t=norm(k.title+" "+htmlToText(k.notes)); return terms.some(function(tm){ return t.indexOf(tm)>=0; }); });
+  }
   function viewPeople(){
     var t=today();
     var html='<h2 class="view-h">People</h2><p class="sub">Keep up with the people who matter — follow-ups, context, and your next touch.</p>';
@@ -2458,8 +2534,14 @@
       if(p.next) html+='<div style="margin-bottom:8px"><span class="pill '+(isDue?"aged":"block")+'">'+(isDue?"⏰ Follow up due":"Next: "+niceDate(p.next))+'</span></div>';
       if(p.last) html+='<div class="sub" style="font-size:12px">Last touch: '+niceDate(p.last)+(p.cadence?" · every "+p.cadence+"d":"")+'</div>';
       if(p.notes) html+='<div style="font-size:13px;margin-top:8px;white-space:pre-wrap">'+esc(p.notes)+'</div>';
-      html+='<div style="display:flex;gap:8px;margin-top:12px"><button class="chip" data-act="editperson" data-id="'+p.id+'">edit</button>'+
-        '<button class="chip" data-act="logtouch" data-id="'+p.id+'">✓ Logged a touch</button></div>';
+      var rel=relatedTasks(p);
+      if(rel.length){ html+='<div class="label" style="margin:12px 0 4px">Related tasks</div><ul class="tasks">'+rel.slice(0,6).map(function(k){var kp=proj(k.projectId);
+        return '<li class="task" data-id="'+k.id+'"><button class="chk '+(k.status==="done"?"done":"")+'" data-act="toggle" aria-label="done" aria-pressed="'+(k.status==="done")+'"></button>'+
+          '<div class="task-main" data-act="edit"><div class="task-title" style="font-size:13.5px">'+esc(k.title)+'</div><div class="task-meta"><span class="pill block">'+(k.day?niceDate(k.day):"someday")+'</span>'+(kp?'<span class="pill proj" style="background:'+kp.color+'">'+esc(kp.name)+'</span>':"")+'</div></div></li>';
+      }).join("")+'</ul>'; }
+      html+='<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button class="chip" data-act="editperson" data-id="'+p.id+'">edit</button>'+
+        '<button class="chip" data-act="logtouch" data-id="'+p.id+'">✓ Logged a touch</button>'+
+        '<button class="chip" data-act="person-task" data-id="'+p.id+'">+ task</button></div>';
       html+='</div></div>';
     });
     if(!people.length) html+='<div class="card empty" style="padding:34px">No people yet. Add someone you want to stay in touch with — a recruiter, a mentor, a friend.</div>';
@@ -2752,7 +2834,7 @@
       ["☁️","Cloud sync settings",function(){ openGhModal(); }],
       ["⚙️","Backup & settings",function(){ document.getElementById("menu-btn").onclick(); }]
     ].map(function(a){ return {icon:a[0],label:a[1],hint:"action",run:a[2]}; });
-    [["today","Today"],["week","Week"],["hub","Hub"],["projects","Projects"],["people","People"],["calendar","Calendar"],["timeline","Timeline"]].forEach(function(v){
+    [["today","Today"],["week","Week"],["backlog","Backlog"],["hub","Hub"],["projects","Projects"],["people","People"],["calendar","Calendar"],["timeline","Timeline"]].forEach(function(v){
       out.push({icon:"→",label:"Go to "+v[1],hint:"view",run:function(){ view=v[0]; syncNav(); render(); }});
     });
     out.push({icon:"🌐",label:"Profile: All",hint:"profile",run:function(){ S.activeProfile="all"; S.filterProjects=[]; save(); render(); }});
@@ -3050,7 +3132,7 @@
     if(e.metaKey||e.ctrlKey||e.altKey) return;
     if(gSeq && Date.now()-gSeq<900){
       gSeq=0;
-      var map={t:"today",w:"week",h:"hub",p:"projects",e:"people",c:"calendar",l:"timeline"};
+      var map={t:"today",w:"week",b:"backlog",h:"hub",p:"projects",e:"people",c:"calendar",l:"timeline"};
       var v2=map[e.key.toLowerCase()];
       if(v2){ e.preventDefault(); view=v2; if(v2==="today") viewDay=today(); syncNav(); render(); return; }
     }
