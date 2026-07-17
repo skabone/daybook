@@ -316,6 +316,9 @@
   .wk-col.today{ border-color:var(--terra); background:var(--terra-bg); }
   .wk-head{ font-size:12px; font-weight:700; color:var(--ink-soft); margin-bottom:6px; }
   .wk-col .cal-ev{ white-space:normal; margin-bottom:3px; }
+  .wk-timed{ display:flex; gap:5px; align-items:flex-start; margin-bottom:3px; }
+  .wk-time{ flex:none; font-size:10px; font-weight:800; color:var(--terra-deep); font-variant-numeric:tabular-nums; padding-top:2px; min-width:40px; }
+  .wk-blk{ font-size:9.5px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--ink-faint); margin:6px 0 2px; }
   .yr-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:12px; }
   .yr-month{ background:var(--card); border:1.5px solid var(--line); border-radius:12px; padding:10px; }
   .yr-month h4{ margin:0 0 6px; font-size:13px; cursor:pointer; color:var(--terra-deep); }
@@ -384,6 +387,11 @@
   /* today layout — centered column + side log panel */
   .today-flex{ display:flex; gap:18px; align-items:flex-start; }
   .today-main{ flex:1 1 auto; min-width:0; display:flex; flex-direction:column; gap:16px; }
+  .today-unit{ position:relative; }
+  .today-unit>.unit-grip{ position:absolute; top:-11px; left:50%; transform:translateX(-50%); z-index:4; color:var(--ink-faint); background:var(--sheet); border:1px solid var(--line-soft); border-radius:999px; cursor:grab; font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; opacity:0; transition:opacity .15s; padding:2px 10px; user-select:none; }
+  .today-unit:hover>.unit-grip{ opacity:.85; }
+  .today-unit.unit-over{ outline:2px dashed var(--terra); outline-offset:4px; border-radius:16px; }
+  .today-unit.unit-dragging{ opacity:.5; }
   .side-panel{ flex:0 0 300px; min-width:0; position:sticky; top:74px; max-height:calc(100vh - 92px); overflow:auto; display:flex; flex-direction:column; gap:14px; }
   @media (max-width:920px){ .today-flex{ display:block; } .side-panel{ position:static; max-height:none; margin-top:16px; } }
   .day-nav{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
@@ -445,6 +453,8 @@
   .wk-day-head .sub{ margin:0; }
 
   /* focus timer */
+  .lock-scrim{ position:fixed; inset:0; z-index:200; background:var(--paper); display:flex; align-items:center; justify-content:center; padding:16px; }
+  .lock-box{ background:var(--card); border:1.5px solid var(--line); border-radius:18px; padding:28px; width:min(340px,100%); text-align:center; box-shadow:0 24px 60px -24px var(--shadow); }
   .timer{ position:fixed; right:16px; bottom:16px; z-index:48; background:var(--slate); color:var(--slate-ink); border-radius:16px; padding:12px 16px; box-shadow:0 18px 40px -12px rgba(0,0,0,.45); display:flex; align-items:center; gap:12px; }
   .timer b{ font-size:22px; font-variant-numeric:tabular-nums; }
   .timer .t-label{ max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; opacity:.85; }
@@ -792,7 +802,7 @@
   var view="today";
   var viewDay=today();
   var pendingFocus=null;
-  var dragTaskId=null, dragJobId=null, dragNestTarget=null, dragFocusId=null;
+  var dragTaskId=null, dragJobId=null, dragNestTarget=null, dragFocusId=null, dragUnitKey=null;
   var pendingSubAdd=null;
   var bulkMode=false, bulkIds={};
   var lastRenderedView=null;
@@ -964,6 +974,22 @@
     return '<li class="task inline-row"><span class="inline-plus">+</span><input class="inline-add" data-focus="1" placeholder="'+label+'" aria-label="'+label+'"/></li>';
   }
   function focusRow(f){
+    if(f.taskId){
+      var k=S.tasks.find(function(x){return x.id===f.taskId;});
+      if(!k) return "";
+      var kp=k.projectId?proj(k.projectId):null;
+      var done=k.status==="done";
+      var lpills='<span class="pill" style="background:var(--terra-bg);color:var(--terra-deep)">↑ task</span>'+
+        (kp?'<span class="pill proj" style="background:'+kp.color+'">'+esc(kp.name)+'</span>':"")+
+        (k.day&&k.day!==viewDay?'<span class="pill block">'+niceDate(k.day)+'</span>':"")+
+        (k.block?'<span class="pill block">'+k.block+'</span>':"")+
+        (k.at?'<span class="pill block">🕒 '+fmtTime(k.at)+'</span>':"")+
+        (k.subs&&k.subs.length?'<span class="pill subs-n">☑ '+k.subs.filter(function(s){return s.done;}).length+'/'+k.subs.length+'</span>':"");
+      return '<li class="task '+(done?"done":"")+'" data-id="'+f.id+'" data-focus="1" draggable="true">'+
+        '<button class="chk '+(done?"done":"")+'" data-act="focus-tasktoggle" data-tid="'+k.id+'" aria-label="Complete task" aria-pressed="'+done+'"></button>'+
+        '<div class="task-main" data-act="focus-editlinked" data-tid="'+k.id+'" title="Tap to edit the task"><div class="task-title">'+esc(k.title)+'</div><div class="task-meta">'+lpills+'</div></div>'+
+        '<button class="task-x" data-act="focus-del" aria-label="Remove from focus" title="Remove from focus (keeps the task)">✕</button></li>';
+    }
     var p=f.projectId?proj(f.projectId):null;
     var pills=(p?'<span class="pill proj" style="background:'+p.color+'">'+esc(p.name)+'</span>':"");
     var subRows="";
@@ -981,6 +1007,14 @@
       '<button class="task-addsub" data-act="fsub-add" aria-label="Add a subitem" title="Add a subitem">⤷+</button>'+
       '<button class="task-x" data-act="focus-del" aria-label="Delete">✕</button></li>';
   }
+  function addTaskToFocus(taskId, silent){
+    if(!taskId||!S.tasks.some(function(x){return x.id===taskId;})) return false;
+    S.focus[viewDay]=S.focus[viewDay]||[];
+    if(S.focus[viewDay].some(function(f){return f.taskId===taskId;})){ if(!silent) toast("Already in Today’s Focus"); return false; }
+    S.focus[viewDay].unshift({id:uid(),taskId:taskId});
+    save(); if(!silent){ render(); toast("Promoted to Today’s Focus"); }
+    return true;
+  }
   function addFocusSubInline(fid,val){
     val=(val||"").trim(); if(!val) return;
     var f=(S.focus[viewDay]||[]).find(function(x){return x.id===fid;}); if(!f) return;
@@ -997,7 +1031,9 @@
   function viewToday(){
     var t=today(), vd=viewDay;
     var isToday=vd===t, isPast=vd<t;
-    var focusItems=(S.focus[vd]||[]).filter(function(f){return !f.projectId||inScope(f.projectId);});
+    var focusItems=(S.focus[vd]||[]).filter(function(f){
+      if(f.taskId){ var lk=S.tasks.find(function(x){return x.id===f.taskId;}); return lk && inScope(lk.projectId); }
+      return !f.projectId||inScope(f.projectId); });
     var open=S.tasks.filter(function(k){return k.day===vd && k.status!=="done" && inScope(k.projectId);});
     var doneV=S.tasks.filter(function(k){return k.status==="done" && k.completedOn===vd && inScope(k.projectId);});
     var blocks=["morning","afternoon","evening"];
@@ -1041,26 +1077,19 @@
 
     if(isToday) html+=captureCardHtml(true);
     var focusDone=focusItems.filter(function(f){return f.done;}).length;
-    html+=fold("focus",(isToday?"Today\'s focus":"Focus — "+niceDate(vd)),'<ul class="tasks" data-list="focus">'+focusItems.map(focusRow).join("")+inlineAddRowFocus("What matters most "+(isToday?"today":"that day")+"…")+'</ul>',foldProg(focusDone,focusItems.length));
     var master=orderTasks(open,false);
-    html+=fold("tasks","Tasks",'<ul class="tasks" data-list="master">'+master.map(taskLi).join("")+inlineAddRow("master","Add a task — try @project @morning, or “tomorrow”…")+'</ul>',foldProg(doneCount,total));
-    // time blocks — side by side on wide screens
-    html+='<div class="blocks-grid" style="margin-top:0">';
-    blocks.forEach(function(b){
+    var BLOCK_ICONS={morning:"☀️",afternoon:"🌤",evening:"🌙"};
+    var blocksHtml='<div class="blocks-grid" style="margin-top:0">'+blocks.map(function(b){
       var items=orderTasks(open.filter(function(k){return k.block===b;}),true);
       var doneB=doneV.filter(function(k){return k.block===b;}).length;
       var body='<ul class="tasks" data-list="'+b+'">'+items.map(taskLi).join("")+inlineAddRow(b,"Add to "+b+"…")+'</ul>';
       var action=foldProg(doneB,items.length+doneB)+'<button class="chip" style="padding:3px 9px" data-act="addblock" data-block="'+b+'">+ options</button>';
-      var BLOCK_ICONS={morning:"☀️",afternoon:"🌤",evening:"🌙"};
-      html+=fold("block-"+b, BLOCK_ICONS[b]+" "+b.charAt(0).toUpperCase()+b.slice(1), body, action);
-    });
-    html+='</div>';
+      return fold("block-"+b, BLOCK_ICONS[b]+" "+b.charAt(0).toUpperCase()+b.slice(1), body, action);
+    }).join("")+'</div>';
     var anytime=orderTasks(open.filter(function(k){return !k.block;}),true);
     var doneA=doneV.filter(function(k){return !k.block;}).length;
-    html+=fold("anytime","⏳ Anytime",'<ul class="tasks" data-list="loose">'+anytime.map(taskLi).join("")+inlineAddRow("loose","Add for anytime — no set time…")+'</ul>',foldProg(doneA,anytime.length+doneA));
     var someday=orderTasks(S.tasks.filter(function(k){return !k.day && k.status!=="done" && inScope(k.projectId);}),false);
     var somedayDone=S.tasks.filter(function(k){return !k.day && k.status==="done" && inScope(k.projectId);}).length;
-    html+=fold("someday","💭 Someday",'<ul class="tasks" data-list="someday">'+someday.map(taskLi).join("")+inlineAddRow("someday","Add for later — no date…")+'</ul>',foldProg(somedayDone,someday.length+somedayDone));
     var hb='';
     S.habits.forEach(function(h){
       var log=(S.habitLog[vd]||{})[h.id]||0; var st=habitStreak(h.id);
@@ -1073,10 +1102,19 @@
     hb+='<button class="chip" data-act="addhabit" style="margin-top:10px">+ habit</button>';
     var habitDone=0, habitTotal=0;
     S.habits.forEach(function(h){ habitTotal+=h.goal; habitDone+=Math.min((S.habitLog[vd]||{})[h.id]||0,h.goal); });
-    html+='<div class="grid2">'+
-      fold("habits","Habits &amp; wellness",hb,foldProg(habitDone,habitTotal))+
-      fold("notes","Notes",richTextHtml("daily",S.notes[vd]||"","Jot anything — ideas, blockers, wins…",110))+
-      '</div>';
+    var units={
+      focus: fold("focus",(isToday?"Today\'s focus":"Focus — "+niceDate(vd)),'<ul class="tasks" data-list="focus">'+focusItems.map(focusRow).join("")+inlineAddRowFocus("What matters most "+(isToday?"today":"that day")+"…")+'</ul>',foldProg(focusDone,focusItems.length)),
+      tasks: fold("tasks","Tasks",'<ul class="tasks" data-list="master">'+master.map(taskLi).join("")+inlineAddRow("master","Add a task — try @project @morning, or “tomorrow”…")+'</ul>',foldProg(doneCount,total)),
+      blocks: blocksHtml,
+      anytime: fold("anytime","⏳ Anytime",'<ul class="tasks" data-list="loose">'+anytime.map(taskLi).join("")+inlineAddRow("loose","Add for anytime — no set time…")+'</ul>',foldProg(doneA,anytime.length+doneA)),
+      someday: fold("someday","💭 Someday",'<ul class="tasks" data-list="someday">'+someday.map(taskLi).join("")+inlineAddRow("someday","Add for later — no date…")+'</ul>',foldProg(somedayDone,someday.length+somedayDone)),
+      habitsnotes: '<div class="grid2">'+fold("habits","Habits &amp; wellness",hb,foldProg(habitDone,habitTotal))+fold("notes","Notes",richTextHtml("daily",S.notes[vd]||"","Jot anything — ideas, blockers, wins…",110))+'</div>'
+    };
+    var DEF_UNITS=["focus","tasks","blocks","anytime","someday","habitsnotes"];
+    var uorder=(S.todayOrder&&S.todayOrder.length)?S.todayOrder.slice():DEF_UNITS.slice();
+    DEF_UNITS.forEach(function(k){ if(uorder.indexOf(k)<0) uorder.push(k); });
+    uorder=uorder.filter(function(k){ return units[k]!==undefined; });
+    uorder.forEach(function(key){ html+='<div class="today-unit" data-unit="'+key+'" draggable="true"><span class="unit-grip" title="Drag to reorder this section">⠿ drag</span>'+units[key]+'</div>'; });
     html+='</div>'; // today-main
     if(S.panelOpen) html+=sidePanelHtml(vd);
     html+='</div>'; // today-flex
@@ -1293,7 +1331,7 @@
   function calAnchorDate(){ return S.calAnchor||today(); }
   function dayItems(ds){
     var items=[];
-    S.tasks.forEach(function(k){ if(k.day===ds&&inScope(k.projectId)) items.push({t:k.title,c:projColor(k.projectId),done:k.status==="done",imp:!!k.priority}); });
+    S.tasks.forEach(function(k){ if(k.day===ds&&inScope(k.projectId)) items.push({t:k.title,c:projColor(k.projectId),done:k.status==="done",imp:!!k.priority,at:k.at||null,block:k.block||null}); });
     S.events.forEach(function(ev){ if(ev.date!==ds||!sourceEnabled(ev)) return; if(ev.projectId&&!inScope(ev.projectId)) return; var c=ev.color||(ev.projectId?projColor(ev.projectId):null); items.push({t:ev.title,c:c,evt:!c}); });
     return items;
   }
@@ -1346,12 +1384,23 @@
   }
   function weekGridHtml(cv,a){
     var days=spanDays(cv,a); var t=today();
+    function evHtml(it){ return '<div class="cal-ev '+(it.evt?"evt":"")+'" style="'+(it.c&&!it.evt?"background:"+it.c:"")+(it.done?";opacity:.45;text-decoration:line-through":"")+'">'+(it.imp?"★ ":"")+esc(it.t)+'</div>'; }
     var html='<div class="wk-cols" style="grid-template-columns:repeat('+days.length+',1fr)">';
     days.forEach(function(ds){
       var d=parse(ds); var items=dayItems(ds);
+      var timed=items.filter(function(it){return it.at;}).sort(function(x,y){return x.at<y.at?-1:1;});
+      var blocked=items.filter(function(it){return !it.at&&it.block;});
+      var loose=items.filter(function(it){return !it.at&&!it.block;});
       html+='<div class="wk-col '+(ds===t?"today":"")+'" data-act="calday" data-d="'+ds+'">'+
-        '<div class="wk-head">'+DOWNAMES[d.getDay()]+' <b>'+d.getDate()+'</b></div>';
-      items.forEach(function(it){ html+='<div class="cal-ev '+(it.evt?"evt":"")+'" style="'+(it.c&&!it.evt?"background:"+it.c:"")+(it.done?";opacity:.45;text-decoration:line-through":"")+'">'+(it.imp?"★ ":"")+esc(it.t)+'</div>'; });
+        '<div class="wk-head">'+DOWNAMES[d.getDay()]+' <b>'+d.getDate()+'</b>'+(items.length?' <span style="font-weight:600;color:var(--ink-faint)">· '+items.length+'</span>':"")+'</div>';
+      // timed tasks — a mini schedule
+      timed.forEach(function(it){ html+='<div class="wk-timed"><span class="wk-time">'+fmtTime(it.at)+'</span><div class="cal-ev '+(it.evt?"evt":"")+'" style="flex:1;'+(it.c&&!it.evt?"background:"+it.c:"")+(it.done?";opacity:.45;text-decoration:line-through":"")+'">'+(it.imp?"★ ":"")+esc(it.t)+'</div></div>'; });
+      // by block (no clock time)
+      ["morning","afternoon","evening"].forEach(function(b){
+        var bi=blocked.filter(function(it){return it.block===b;});
+        if(bi.length){ html+='<div class="wk-blk">'+({morning:"☀︎",afternoon:"🌤",evening:"🌙"}[b])+' '+b+'</div>'+bi.map(evHtml).join(""); }
+      });
+      if(loose.length){ if(timed.length||blocked.length) html+='<div class="wk-blk">— anytime —</div>'; loose.forEach(function(it){ html+=evHtml(it); }); }
       if(!items.length) html+='<div class="empty" style="padding:8px 0">—</div>';
       html+='</div>';
     });
@@ -1488,16 +1537,21 @@
         S.habitLog[t][hid]= cur===i?i-1:i; save(); render(); };
     });
     // drag & drop — tasks between today lists, job cards between stages
-    function clearDrag(){ [].forEach.call(v.querySelectorAll(".drag-over,.nest-over"),function(x){ x.classList.remove("drag-over"); x.classList.remove("nest-over"); }); }
+    function clearDrag(){ [].forEach.call(v.querySelectorAll(".drag-over,.nest-over,.unit-over"),function(x){ x.classList.remove("drag-over"); x.classList.remove("nest-over"); x.classList.remove("unit-over"); }); }
     v.ondragstart=function(e){
       var li=e.target.closest&&e.target.closest(".task[data-id]");
       var jc=e.target.closest&&e.target.closest(".job-card[data-id]");
       if(li && li.dataset.focus){ dragFocusId=li.dataset.id; e.dataTransfer.effectAllowed="move"; try{ e.dataTransfer.setData("text/plain",li.dataset.id); }catch(err){} return; }
-      if(li) dragTaskId=li.dataset.id; else if(jc) dragJobId=jc.dataset.id; else return;
+      if(li) dragTaskId=li.dataset.id;
+      else if(jc) dragJobId=jc.dataset.id;
+      else { var unit=e.target.closest&&e.target.closest(".today-unit[data-unit]");
+        if(unit && !e.target.closest("input,textarea,[contenteditable=true]")){ dragUnitKey=unit.dataset.unit; unit.classList.add("unit-dragging"); e.dataTransfer.effectAllowed="move"; try{ e.dataTransfer.setData("text/plain",dragUnitKey); }catch(err){} }
+        return; }
       e.dataTransfer.effectAllowed="move"; try{ e.dataTransfer.setData("text/plain",(li||jc).dataset.id); }catch(err){}
       if(dragTaskId && S.tasks.some(function(x){return x.id===dragTaskId;})) showDragDock();
     };
     v.ondragover=function(e){
+      if(dragUnitKey){ var u=e.target.closest(".today-unit[data-unit]"); if(u && u.dataset.unit!==dragUnitKey){ e.preventDefault(); e.dataTransfer.dropEffect="move"; clearDrag(); u.classList.add("unit-over"); } return; }
       if(dragFocusId){ var ulf=e.target.closest('.tasks[data-list="focus"]'); if(ulf){ e.preventDefault(); e.dataTransfer.dropEffect="move"; clearDrag(); ulf.classList.add("drag-over"); } return; }
       if(dragTaskId){
         var li=e.target.closest(".task[data-id]");
@@ -1511,6 +1565,16 @@
       else if(dragJobId){ var col=e.target.closest(".jobs-col[data-stage]"); if(col){ e.preventDefault(); e.dataTransfer.dropEffect="move"; clearDrag(); col.classList.add("drag-over"); } }
     };
     v.ondrop=function(e){
+      if(dragUnitKey){ var u=e.target.closest(".today-unit[data-unit]");
+        if(u && u.dataset.unit!==dragUnitKey){ e.preventDefault();
+          var DEF=["focus","tasks","blocks","anytime","someday","habitsnotes"];
+          var ord=(S.todayOrder&&S.todayOrder.length)?S.todayOrder.slice():DEF.slice();
+          DEF.forEach(function(k){ if(ord.indexOf(k)<0) ord.push(k); });
+          ord=ord.filter(function(k){ return DEF.indexOf(k)>=0; });
+          ord.splice(ord.indexOf(dragUnitKey),1);
+          ord.splice(ord.indexOf(u.dataset.unit),0,dragUnitKey);
+          S.todayOrder=ord; dragUnitKey=null; save(); render(); return; }
+        dragUnitKey=null; clearDrag(); return; }
       if(dragFocusId){ var ulf=e.target.closest('.tasks[data-list="focus"]'); if(ulf){ e.preventDefault();
         var arr=S.focus[viewDay]||[]; var fi=arr.findIndex(function(x){return x.id===dragFocusId;});
         if(fi>=0){ var item=arr.splice(fi,1)[0]; var ftgt=e.target.closest(".task[data-id]");
@@ -1519,6 +1583,7 @@
         dragFocusId=null; clearDrag(); return; }
       if(dragTaskId && dragNestTarget){ e.preventDefault(); var nid=dragTaskId, ntgt=dragNestTarget; dragTaskId=null; dragNestTarget=null; clearDrag(); hideDragDock(); nestTask(nid,ntgt); return; }
       if(dragTaskId){ var ul=e.target.closest(".tasks[data-list]"); if(ul){ e.preventDefault();
+        if(ul.dataset.list==="focus"){ var did=dragTaskId; dragTaskId=null; clearDrag(); hideDragDock(); addTaskToFocus(did); return; }
         var k=S.tasks.find(function(x){return x.id===dragTaskId;});
         if(k){ var listName=ul.dataset.list;
           if(listName==="someday"){ k.day=null; k.block=null; }
@@ -1532,9 +1597,9 @@
       else if(dragJobId){ var col=e.target.closest(".jobs-col[data-stage]"); if(col){ e.preventDefault();
         var j=S.jobs.find(function(x){return x.id===dragJobId;});
         if(j&&j.stage!==col.dataset.stage){ j.stage=col.dataset.stage; save(); render(); toast("Moved to "+col.dataset.stage); } } }
-      dragTaskId=null; dragJobId=null; dragNestTarget=null; dragFocusId=null; clearDrag(); hideDragDock();
+      dragTaskId=null; dragJobId=null; dragNestTarget=null; dragFocusId=null; dragUnitKey=null; clearDrag(); hideDragDock();
     };
-    v.ondragend=function(){ dragTaskId=null; dragJobId=null; dragNestTarget=null; dragFocusId=null; clearDrag(); hideDragDock(); };
+    v.ondragend=function(){ dragTaskId=null; dragJobId=null; dragNestTarget=null; dragFocusId=null; dragUnitKey=null; [].forEach.call(v.querySelectorAll(".unit-dragging"),function(x){x.classList.remove("unit-dragging");}); clearDrag(); hideDragDock(); };
     // generic clicks
     v.onclick=function(e){
       var a=e.target.closest("[data-act]"); if(!a)return; var act=a.dataset.act;
@@ -1548,6 +1613,8 @@
       else if(act==="focus-toggle"){ var fx=(S.focus[viewDay]||[]).find(function(x){return x.id===anyId;}); if(fx){ fx.done=!fx.done; save(); render(); } }
       else if(act==="focus-del"){ var arr=S.focus[viewDay]||[]; var fi=arr.findIndex(function(x){return x.id===anyId;}); if(fi>=0){ var fdel=arr[fi]; arr.splice(fi,1); save(); render(); toastUndo("Focus item deleted",function(){ arr.splice(Math.min(fi,arr.length),0,fdel); save(); render(); }); } }
       else if(act==="focus-edit"){ var fitem=(S.focus[viewDay]||[]).find(function(x){return x.id===anyId;}); if(fitem) openFocusEditModal(fitem); }
+      else if(act==="focus-tasktoggle"){ toggleTask(a.dataset.tid); }
+      else if(act==="focus-editlinked"){ var lt=S.tasks.find(function(x){return x.id===a.dataset.tid;}); if(lt) openTaskModal({edit:lt}); }
       else if(act==="sub-toggle"){ var pk=S.tasks.find(function(x){return x.id===(id||anyId);}); if(pk){ var sb=(pk.subs||[]).find(function(x){return x.id===a.dataset.sid;}); if(sb){ sb.done=!sb.done; save(); render(); } } }
       else if(act==="sub-add"){ pendingSubAdd=(id||anyId); render(); }
       else if(act==="fsub-add"){ pendingSubAdd=(id||anyId); render(); }
@@ -1854,7 +1921,7 @@
         [["once","Once"],["daily","Daily"],["weekly","Weekly"],["everyN","Every N days"]].map(function(f){return '<button class="chip" data-f="'+f[0]+'" aria-pressed="'+(f[0]===freq)+'">'+f[1]+'</button>';}).join("")+'</div>'+
         '<div id="m-ropts" style="margin-top:10px"></div>'+(etp?'<div class="sub" style="font-size:11px;margin-top:6px">This task repeats — changes here update the whole series. Pick “Once” to stop it repeating.</div>':(ed?'<div class="sub" style="font-size:11px;margin-top:6px">Pick a repeat to turn this into a recurring task going forward.</div>':""))+'</div>'+
       '<div class="modal-actions">'+
-      (ed?'<button class="btn ghost" id="m-del" style="margin-right:auto;color:var(--terra-deep)">Delete</button><button class="btn" id="m-focus" title="Start a 25-minute focus timer on this task">⏱</button><button class="btn" id="m-dup">Duplicate</button>':'')+
+      (ed?'<button class="btn ghost" id="m-del" style="margin-right:auto;color:var(--terra-deep)">Delete</button><button class="btn" id="m-tofocus" title="Add to Today\'s Focus">⭐</button><button class="btn" id="m-focus" title="Start a 25-minute focus timer on this task">⏱</button><button class="btn" id="m-dup">Duplicate</button>':'')+
       '<button class="btn ghost" data-x>Cancel</button><button class="btn primary" id="m-save">'+(ed?"Save":"Add task")+'</button></div>');
     var mb=document.getElementById("m-block");
     mb.onclick=function(e){ var b=e.target.closest(".chip"); if(!b)return; var val=b.dataset.b;
@@ -1908,6 +1975,7 @@
         var di=S.tasks.findIndex(function(x){return x.id===ed.id;}); var dt=di>=0?S.tasks[di]:null; if(di>=0) S.tasks.splice(di,1); save(); close(); render(); if(dt) toastUndo("Task deleted",function(){ S.tasks.splice(Math.min(di,S.tasks.length),0,dt); save(); render(); }); };
       document.getElementById("m-dup").onclick=function(){ var c={}; for(var kk in ed) c[kk]=ed[kk]; c.id=uid(); c.status="todo"; c.completedOn=null; c.created=today(); delete c.tplId; c.subs=(ed.subs||[]).map(function(s){return {id:uid(),text:s.text,done:false};}); S.tasks.push(c); save(); close(); render(); toast("Task duplicated"); };
       document.getElementById("m-focus").onclick=function(){ close(); startFocusTimer(ed.title,25); };
+      document.getElementById("m-tofocus").onclick=function(){ var vd0=viewDay; viewDay=today(); addTaskToFocus(ed.id,true); viewDay=vd0; save(); close(); if(view==="today") render(); toast("Added to Today’s Focus"); };
     }
     function commitTask(dismiss){
       var title=document.getElementById("m-title").value.trim(); if(!title){ if(dismiss){close();} else {toast("Add a title");} return; }
@@ -2152,7 +2220,7 @@
     body+='<div class="fld"><label>Events &amp; milestones</label><ul class="tasks">'+
       (evs.length?evs.map(function(e){return '<li class="task" data-id="'+e.id+'"><span class="dot" style="background:'+(e.color||projColor(e.projectId))+';border-color:transparent;cursor:default"></span><div class="task-main"'+(e.sourceId?' style="cursor:default"':' data-dact="editev" title="Tap to edit"')+'><div class="task-title">'+esc(e.title)+'</div>'+(e.sourceId?'<div class="task-meta"><span class="pill block">subscribed</span></div>':"")+'</div>'+(e.sourceId?"":'<button class="task-x" data-dact="delev" style="opacity:1" aria-label="delete">✕</button>')+'</li>';}).join(""):'<div class="empty">No events</div>')+'</ul></div>';
     var fitems=S.focus[ds]||[];
-    if(fitems.length) body+='<div class="fld"><label>Focus that day</label><ul class="tasks">'+fitems.map(function(f){return '<li class="task '+(f.done?"done":"")+'"><span class="dot '+(f.done?"on":"")+'" style="cursor:default"></span><div class="task-main" style="cursor:default"><div class="task-title">'+esc(f.text)+'</div>'+(f.subs&&f.subs.length?'<div class="task-meta"><span class="pill subs-n">☑ '+f.subs.filter(function(s){return s.done;}).length+'/'+f.subs.length+'</span></div>':"")+'</div></li>';}).join("")+'</ul></div>';
+    if(fitems.length) body+='<div class="fld"><label>Focus that day</label><ul class="tasks">'+fitems.map(function(f){ var ftxt=f.text, fdone=f.done, fsubs=f.subs; if(f.taskId){ var lk=S.tasks.find(function(x){return x.id===f.taskId;}); if(!lk) return ""; ftxt=lk.title; fdone=lk.status==="done"; fsubs=lk.subs; } return '<li class="task '+(fdone?"done":"")+'"><span class="dot '+(fdone?"on":"")+'" style="cursor:default"></span><div class="task-main" style="cursor:default"><div class="task-title">'+esc(ftxt)+'</div>'+(fsubs&&fsubs.length?'<div class="task-meta"><span class="pill subs-n">☑ '+fsubs.filter(function(s){return s.done;}).length+'/'+fsubs.length+'</span></div>':"")+'</div></li>';}).join("")+'</ul></div>';
     body+='<div class="fld"><label>Notes</label>'+richTextHtml("day:"+ds,S.notes[ds]||"","Nothing written this day — add a note…",64,"d-note","rte-compact")+'</div>';
     body+='<div class="modal-actions"><button class="btn ghost" data-x>Close</button><button class="btn" id="d-addev">+ Event</button><button class="btn primary" id="d-addtask">+ Task</button></div>';
     modal(body);
@@ -2445,6 +2513,7 @@
       (window.showSaveFilePicker?'<button class="btn" id="x-sync">🔗 '+(syncName?"Sync file: "+esc(syncName):"Link a sync file (auto-save)")+'</button>'+(syncName?'<button class="btn ghost" id="x-unsync">Unlink sync file</button>':""):"")+
       '<button class="btn" id="x-gh">☁️ '+(GH&&GH.gistId?"Cloud sync: connected":"Cloud sync via GitHub (cross-device)")+'</button>'+
       '<button class="btn" id="x-remind">🔔 Task-time reminders: '+(S.remind?"on":"off")+'</button>'+
+      '<button class="btn" id="x-lock">🔒 App lock: '+(lockCfg()?"on":"off")+'</button>'+
       '<button class="btn" id="x-archive">🗄 Archive done tasks older than 60 days'+(archN?' ('+archN+')':'')+'</button>'+
       '<button class="btn" id="x-install">📱 Add to phone home screen</button>'+
       '<button class="btn" id="x-host">🌐 Put it online (GitHub Pages)</button>'+
@@ -2456,6 +2525,7 @@
     document.getElementById("x-csv").onclick=exportCSV;
     document.getElementById("x-ics").onclick=exportICSFile;
     document.getElementById("x-restore").onclick=function(){ close(); openRestoreModal(); };
+    document.getElementById("x-lock").onclick=function(){ close(); openLockModal(); };
     document.getElementById("x-remind").onclick=function(){
       if(!S.remind){
         if(typeof Notification==="undefined"){ toast("This browser can't show notifications"); return; }
@@ -2980,6 +3050,35 @@
   }
   function beep(){ try{ var C=window.AudioContext||window.webkitAudioContext; var ctx=new C(); var o=ctx.createOscillator(), g=ctx.createGain(); o.connect(g); g.connect(ctx.destination); o.frequency.value=880; g.gain.setValueAtTime(.001,ctx.currentTime); g.gain.exponentialRampToValueAtTime(.2,ctx.currentTime+.02); g.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+.9); o.start(); o.stop(ctx.currentTime+1); }catch(e){} }
 
+  /* ---------- optional passcode lock (device-only, screen lock — not encryption) ---------- */
+  var LOCK_KEY="daybook-lock";
+  function hashCode(s){ var h=5381; for(var i=0;i<s.length;i++){ h=((h<<5)+h+s.charCodeAt(i))>>>0; } return "h"+h.toString(36); }
+  function lockCfg(){ try{ return JSON.parse(localStorage.getItem(LOCK_KEY)); }catch(e){ return null; } }
+  function showLock(){
+    if(document.getElementById("lock-scrim")) return;
+    var box=document.createElement("div"); box.className="lock-scrim"; box.id="lock-scrim";
+    box.innerHTML='<div class="lock-box"><div style="font-size:34px">🔒</div><h3 style="margin:8px 0 4px">Daybook is locked</h3><p class="sub" style="margin:0 0 4px">Enter your passcode</p><input id="lock-in" type="password" inputmode="numeric" autocomplete="off" style="width:100%;text-align:center;font-size:20px;letter-spacing:.25em;padding:11px;border:1.5px solid var(--line);border-radius:12px;margin:8px 0;background:var(--sheet);color:var(--ink)"/><div id="lock-err" class="sub" style="color:var(--terra-deep);min-height:18px;margin:0"></div><button class="btn primary" id="lock-go" style="width:100%">Unlock</button></div>';
+    document.body.appendChild(box);
+    var inp=document.getElementById("lock-in"); setTimeout(function(){ inp.focus(); },60);
+    function tryUnlock(){ var cfg=lockCfg(); if(cfg&&hashCode(inp.value)===cfg.hash){ box.remove(); } else { document.getElementById("lock-err").textContent="Wrong passcode"; inp.value=""; inp.focus(); } }
+    document.getElementById("lock-go").onclick=tryUnlock;
+    inp.addEventListener("keydown",function(e){ if(e.key==="Enter"){ e.preventDefault(); tryUnlock(); } });
+  }
+  function openLockModal(){
+    var has=!!lockCfg();
+    modal('<h3>🔒 App lock</h3><p class="sub">Shows a passcode screen when Daybook opens on this device. Note: this hides the screen, it does not encrypt your data — someone with deep browser access could still read it. Good for casual privacy.</p>'+
+      (has?'<div class="stack"><button class="btn" id="lk-change">Change passcode</button><button class="btn" id="lk-lock">🔒 Lock now</button><button class="btn ghost" id="lk-remove" style="color:var(--terra-deep)">Remove passcode</button></div><div class="modal-actions"><button class="btn primary" data-x>Done</button></div>'
+          :'<div class="fld"><label>New passcode (3+ characters)</label><input id="lk-new" type="password" inputmode="numeric" autocomplete="off" placeholder="e.g. a PIN"/></div><div class="modal-actions"><button class="btn ghost" data-x>Cancel</button><button class="btn primary" id="lk-set">Set passcode</button></div>'));
+    document.querySelector("[data-x]").onclick=close;
+    if(has){
+      document.getElementById("lk-lock").onclick=function(){ close(); showLock(); };
+      document.getElementById("lk-remove").onclick=function(){ confirmModal("Remove passcode?","Daybook will open without a lock on this device.","Remove",function(){ localStorage.removeItem(LOCK_KEY); toast("Passcode removed"); }); };
+      document.getElementById("lk-change").onclick=function(){ localStorage.removeItem(LOCK_KEY); close(); openLockModal(); };
+    } else {
+      document.getElementById("lk-set").onclick=function(){ var v=document.getElementById("lk-new").value; if((v||"").length<3){ toast("Use at least 3 characters"); return; } localStorage.setItem(LOCK_KEY, JSON.stringify({hash:hashCode(v)})); close(); toast("Passcode set — it'll ask when you next open Daybook"); };
+    }
+  }
+
   /* ---------- first-run welcome ---------- */
   function openWelcomeModal(){
     modal('<h3>👋 Welcome to Daybook</h3><p class="sub">A day planner that lives entirely in your browser — no account, no server, your data stays yours.</p>'+
@@ -3168,6 +3267,7 @@
   refreshCalendars(function(){ if(view==="calendar") render(); });
   ghPull();
   document.addEventListener("visibilitychange",function(){ if(!document.hidden) ghPull(); });
+  if(lockCfg()) showLock();
   if(S.welcomed===false){ S.welcomed=true; save(); openWelcomeModal(); }
 })();
 </script>
