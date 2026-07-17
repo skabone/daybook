@@ -2595,12 +2595,45 @@
   /* ---------- AI intake (round-trip via Claude) ---------- */
   function buildAIPrompt(blurb){
     var names=S.projects.map(function(p){return p.name;}).join(", ")||"none yet";
+    var profs=S.profiles.map(function(p){return p.name;}).join(", ")||"none yet";
     return "You are helping me fill in my personal planner app, Daybook. I'll give you a brain-dump below.\n\n"+
-      "STEP 1 — Ask me a few brief clarifying questions for anything missing (dates, which project, priority, job stage, who an email is from, etc.). Keep it short.\n\n"+
+      "STEP 1 — Ask me a few brief clarifying questions for anything missing (dates, which project, priority, whether a task has sub-steps, job stage, who an email is from, etc.). Keep it short.\n\n"+
       "STEP 2 — After I answer, reply with ONLY a single fenced ```json code block in exactly this shape. Omit any field or array you have nothing for:\n"+
-      "```json\n{\n  \"focusToday\": \"string\",\n  \"projects\": [{\"name\": \"string\"}],\n  \"tasks\": [{\"title\": \"string\", \"project\": \"string\", \"day\": \"YYYY-MM-DD\", \"block\": \"morning|afternoon|evening\", \"priority\": true}],\n  \"events\": [{\"title\": \"string\", \"date\": \"YYYY-MM-DD\", \"project\": \"string\"}],\n  \"jobs\": [{\"company\": \"string\", \"role\": \"string\", \"stage\": \"Saved|Applied|Interviewing|Offer|Closed\", \"next\": \"string\", \"link\": \"string\", \"notes\": \"string\"}],\n  \"emails\": [{\"subject\": \"string\", \"sender\": \"string\"}],\n  \"notes\": [\"string\"]\n}\n```\n\n"+
-      "Rules: today is "+today()+" — use real YYYY-MM-DD dates. \"project\" is a name; reuse one of my existing projects if it fits ("+names+"), otherwise choose a sensible new name. Don't invent anything I didn't say.\n\n"+
+      "```json\n{\n"+
+      "  \"profiles\": [{\"name\": \"string\", \"emoji\": \"string\"}],\n"+
+      "  \"projects\": [{\"name\": \"string\", \"profile\": \"string\"}],\n"+
+      "  \"focus\": [{\"text\": \"string\", \"project\": \"string\", \"subtasks\": [\"string\"]}],\n"+
+      "  \"tasks\": [{\n"+
+      "    \"title\": \"string\",\n"+
+      "    \"project\": \"string\",\n"+
+      "    \"day\": \"YYYY-MM-DD\",\n"+
+      "    \"block\": \"morning|afternoon|evening|anytime\",\n"+
+      "    \"time\": \"HH:MM\",\n"+
+      "    \"priority\": true,\n"+
+      "    \"notes\": \"string\",\n"+
+      "    \"subtasks\": [\"string\"]\n"+
+      "  }],\n"+
+      "  \"events\": [{\"title\": \"string\", \"date\": \"YYYY-MM-DD\", \"project\": \"string\"}],\n"+
+      "  \"jobs\": [{\"company\": \"string\", \"role\": \"string\", \"stage\": \"Saved|Applied|Interviewing|Offer|Closed\", \"next\": \"string\", \"link\": \"string\", \"notes\": \"string\"}],\n"+
+      "  \"emails\": [{\"subject\": \"string\", \"sender\": \"string\"}],\n"+
+      "  \"notes\": [\"string\"]\n"+
+      "}\n```\n\n"+
+      "Rules:\n"+
+      "- Today is "+today()+" — use real YYYY-MM-DD dates.\n"+
+      "- For a task with NO deadline, OMIT \"day\" entirely — it goes to my Someday list. For today, use today's date.\n"+
+      "- \"subtasks\" are the checklist sub-steps nested under a task (or a focus item). Break multi-step things into subtasks.\n"+
+      "- \"block\" is the time of day. Use \"anytime\" (or omit) if there's no specific part of day. \"time\" is a 24-hour clock time like \"15:00\".\n"+
+      "- \"priority\": true marks a task as important (it sorts to the top).\n"+
+      "- \"notes\" is free-text detail/context for that task.\n"+
+      "- \"focus\" holds my top priorities for today (each can have its own subtasks).\n"+
+      "- \"project\" is a name; reuse one of my existing projects if it fits ("+names+"), otherwise choose a sensible new name. \"profile\" groups projects into a context — my existing profiles: "+profs+".\n"+
+      "- Don't invent anything I didn't say.\n\n"+
       "My brain-dump:\n\"\"\"\n"+blurb+"\n\"\"\"";
+  }
+  function parseTimeAI(s){ if(!s) return null; s=String(s).trim().toLowerCase();
+    var m=s.match(/^(\d{1,2}):(\d{2})$/); if(m){ var h=+m[1]; if(h<=23&&+m[2]<=59) return String(h).padStart(2,"0")+":"+m[2]; }
+    m=s.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/); if(m){ var h2=+m[1]%12; if(m[3]==="pm")h2+=12; return String(h2).padStart(2,"0")+":"+(m[2]||"00"); }
+    return null;
   }
   function extractJSON(text){
     if(!text) return null;
@@ -2613,9 +2646,20 @@
     if(!d){ toast("Couldn't read that — paste Claude's ```json block"); return; }
     var items=[];
     function arr(a){ return Array.isArray(a)?a:[]; }
+    function subCount(a){ var s=arr(a).filter(Boolean); return s.length?" · "+s.length+" subtask"+(s.length===1?"":"s"):""; }
+    arr(d.profiles).forEach(function(p){ if(p&&p.name) items.push("<b>Profile:</b> "+esc(String(p.emoji||""))+" "+esc(String(p.name))); });
+    arr(d.projects).forEach(function(p){ if(p&&p.name) items.push("<b>Project:</b> "+esc(String(p.name))+(p.profile?" · "+esc(String(p.profile)):"")); });
     if(d.focusToday) items.push("<b>Focus:</b> "+esc(String(d.focusToday)));
-    arr(d.projects).forEach(function(p){ if(p&&p.name) items.push("<b>Project:</b> "+esc(String(p.name))); });
-    arr(d.tasks).forEach(function(k){ if(k&&k.title) items.push("<b>Task:</b> "+esc(String(k.title))+(validDate(k.day)?" · "+niceDate(k.day):"")); });
+    arr(d.focus).forEach(function(f){ var txt=(typeof f==="string")?f:(f&&f.text); if(txt) items.push("<b>Focus:</b> "+esc(String(txt))+subCount(f&&f.subtasks)); });
+    arr(d.tasks).forEach(function(k){ if(k&&k.title){ var meta="";
+      var hasDay=("day" in k)&&k.day!=null&&k.day!==""&&String(k.day).toLowerCase()!=="someday";
+      meta+=hasDay?(validDate(k.day)?" · "+niceDate(k.day):""):" · someday";
+      if(k.block&&k.block!=="anytime") meta+=" · "+k.block;
+      if(parseTimeAI(k.time)) meta+=" · 🕒 "+k.time;
+      if(k.priority) meta+=" · ★";
+      meta+=subCount(k.subtasks);
+      if(k.notes) meta+=" · 📝";
+      items.push("<b>Task:</b> "+esc(String(k.title))+meta); } });
     arr(d.events).forEach(function(ev){ if(ev&&ev.title&&validDate(ev.date)) items.push("<b>Event:</b> "+esc(String(ev.title))+" · "+niceDate(ev.date)); });
     arr(d.jobs).forEach(function(j){ if(j&&j.company) items.push("<b>Job:</b> "+esc(String(j.company))+(j.role?" — "+esc(String(j.role)):"")); });
     arr(d.emails).forEach(function(e){ if(e&&e.subject) items.push("<b>Email:</b> "+esc(String(e.subject))); });
@@ -2627,18 +2671,29 @@
     document.querySelector("[data-x]").onclick=close;
     document.getElementById("ai-go").onclick=function(){ applyAIImport(d); close(); render(); };
   }
-  function projByName(name){ if(!name)return null; var p=S.projects.find(function(x){return x.name.toLowerCase()===String(name).toLowerCase();}); if(!p){ p={id:uid(),name:name,color:COLORS[S.projects.length%COLORS.length],notes:""}; S.projects.push(p); } return p; }
+  function profByName(name){ if(!name)return null; var pr=S.profiles.find(function(x){return x.name.toLowerCase()===String(name).toLowerCase();}); if(!pr){ pr={id:uid(),name:String(name),emoji:"📁"}; S.profiles.push(pr); } return pr; }
+  function projByName(name, profileName){ if(!name)return null; var p=S.projects.find(function(x){return x.name.toLowerCase()===String(name).toLowerCase();}); if(!p){ p={id:uid(),name:String(name),color:COLORS[S.projects.length%COLORS.length],notes:"",profileId:null,fav:false}; S.projects.push(p); } if(profileName){ var pr=profByName(profileName); if(pr) p.profileId=pr.id; } return p; }
   function validDate(s){ return (typeof s==="string"&&/^\d{4}-\d{2}-\d{2}$/.test(s))?s:null; }
+  function aiSubs(a){ return (Array.isArray(a)?a:[]).filter(Boolean).map(function(s){ return {id:uid(),text:String(typeof s==="string"?s:(s.text||"")),done:false}; }).filter(function(s){return s.text.trim();}); }
   function applyAIImport(d){
     var t=today(), n=0;
-    if(d.focusToday){ S.focus[t]=S.focus[t]||[]; S.focus[t].push({id:uid(),text:String(d.focusToday),done:false}); n++; }
-    (d.projects||[]).forEach(function(p){ if(p&&p.name){ projByName(p.name); n++; } });
-    (d.tasks||[]).forEach(function(k){ if(!k||!k.title)return; var pid=k.project?projByName(k.project).id:null; var bl=["morning","afternoon","evening"].indexOf(k.block)>=0?k.block:null; S.tasks.push({id:uid(),title:String(k.title),projectId:pid,status:"todo",day:validDate(k.day)||t,block:bl,priority:!!k.priority,rollover:0,created:t}); n++; });
-    (d.events||[]).forEach(function(ev){ if(!ev||!ev.title||!validDate(ev.date))return; var pid=ev.project?projByName(ev.project).id:null; S.events.push({id:uid(),title:String(ev.title),date:validDate(ev.date),projectId:pid,source:"ai"}); n++; });
+    (d.profiles||[]).forEach(function(pr){ if(pr&&pr.name){ var x=profByName(pr.name); if(pr.emoji) x.emoji=String(pr.emoji); n++; } });
+    (d.projects||[]).forEach(function(p){ if(p&&p.name){ projByName(p.name, p.profile); n++; } });
+    if(d.focusToday){ S.focus[t]=S.focus[t]||[]; S.focus[t].push({id:uid(),text:String(d.focusToday),done:false,subs:[]}); n++; }
+    (Array.isArray(d.focus)?d.focus:[]).forEach(function(f){ if(!f)return; var txt=(typeof f==="string")?f:f.text; if(!txt)return;
+      var fpid=(f&&f.project)?projByName(f.project,f.profile).id:null;
+      S.focus[t]=S.focus[t]||[]; S.focus[t].push({id:uid(),text:String(txt),projectId:fpid,done:false,subs:aiSubs(f.subtasks)}); n++; });
+    (d.tasks||[]).forEach(function(k){ if(!k||!k.title)return;
+      var pid=k.project?projByName(k.project,k.profile).id:null;
+      var bl=["morning","afternoon","evening"].indexOf(k.block)>=0?k.block:null;
+      var dayVal; if(!("day" in k)||k.day==null||k.day===""||String(k.day).toLowerCase()==="someday") dayVal=null; else dayVal=validDate(k.day)||t;
+      var at=parseTimeAI(k.time); if(at&&!bl) bl=blockForTime(at);
+      S.tasks.push({id:uid(),title:String(k.title),projectId:pid,status:"todo",day:dayVal,block:bl,at:at,priority:!!k.priority,rollover:0,notes:k.notes?plainToHtml(String(k.notes)):null,subs:aiSubs(k.subtasks),created:t}); n++; });
+    (d.events||[]).forEach(function(ev){ if(!ev||!ev.title||!validDate(ev.date))return; var pid=ev.project?projByName(ev.project,ev.profile).id:null; S.events.push({id:uid(),title:String(ev.title),date:validDate(ev.date),projectId:pid,source:"ai"}); n++; });
     (d.jobs||[]).forEach(function(j){ if(!j||!j.company)return; var st=JOB_STAGES.indexOf(j.stage)>=0?j.stage:"Saved"; S.jobs.push({id:uid(),company:String(j.company),role:j.role||"",stage:st,next:j.next||"",link:j.link||"",notes:j.notes||""}); n++; });
     (d.emails||[]).forEach(function(e){ if(!e||!e.subject)return; S.emails.unshift({id:uid(),subject:String(e.subject),sender:e.sender||"",done:false,created:t}); n++; });
-    (d.notes||[]).forEach(function(nt){ if(!nt)return; S.notes[t]=(S.notes[t]?S.notes[t]+"\n":"")+String(nt); n++; });
-    fillProjSelect(); save(); toast("Added "+n+" item"+(n===1?"":"s")+" from Claude");
+    (d.notes||[]).forEach(function(nt){ if(!nt)return; S.notes[t]=(S.notes[t]?S.notes[t]+"<br>":"")+plainToHtml(String(nt)); n++; });
+    ensureOrd(); fillProjSelect(); save(); toast("Added "+n+" item"+(n===1?"":"s")+" from Claude");
   }
   /* ---------- global search ---------- */
   function openSearchModal(){
