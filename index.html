@@ -598,7 +598,74 @@
   var PROXY_DEFAULT = "https://api.allorigins.win/raw?url=";
   var SPU_PROJECT_ID="spu-social-psych-2026";
   var SPU_PLAN_REVISION=2026071404;
+  // ---- merge-by-item sync (Phase 2) ----
+  var IDLISTS=["projects","tasks","templates","habits","events","phases","people","emails","jobs","improve","calSources","profiles","archive"];
+  var IDMAPS=["notes","focus","habitLog"]; // date-keyed maps merged per key
+  function clone(x){ return JSON.parse(JSON.stringify(x)); }
+  function itemSig(x){ if(!x||typeof x!=="object") return JSON.stringify(x); var o={}; for(var k in x){ if(k!=="_m") o[k]=x[k]; } return JSON.stringify(o); }
+  // Stamp per-item modified-times and deletion tombstones by diffing against the previous saved state.
+  function stampChanges(prev,cur){
+    var now=Date.now();
+    IDLISTS.forEach(function(key){
+      var pv={}; (prev&&prev[key]||[]).forEach(function(x){ if(x&&x.id) pv[x.id]=x; });
+      var seen={};
+      (cur[key]||[]).forEach(function(x){ if(!x||!x.id) return; seen[x.id]=1;
+        var old=pv[x.id];
+        if(!old || itemSig(old)!==itemSig(x)){ x._m=now; delete cur._del[x.id]; } // new or changed
+        else if(!x._m){ x._m=old._m||now; }
+      });
+      Object.keys(pv).forEach(function(id){ if(!seen[id]) cur._del[id]=now; }); // vanished -> tombstone
+    });
+    IDMAPS.forEach(function(key){
+      var pm=prev&&prev[key]||{}, cm=cur[key]||{}, mm=cur._mm[key];
+      Object.keys(cm).forEach(function(k){ if(JSON.stringify(pm[k])!==JSON.stringify(cm[k])){ mm[k]=now; delete cur._del[key+":"+k]; } });
+      Object.keys(pm).forEach(function(k){ if(!(k in cm)) cur._del[key+":"+k]=now; });
+    });
+    // prune ancient tombstones (60d) so the map can't grow forever
+    var cut=now-60*864e5; Object.keys(cur._del).forEach(function(k){ if(cur._del[k]<cut) delete cur._del[k]; });
+  }
+  // Non-destructive union of two full states: newest edit of each item wins; tombstones honored.
+  function mergeStates(local,cloud){
+    var A=clone(local), B=clone(cloud);
+    var out=(( (B.savedAt||0) > (A.savedAt||0) )?clone(B):clone(A)); // scalars/settings from the newer file
+    out._del={}; Object.keys(A._del||{}).forEach(function(k){ out._del[k]=A._del[k]; });
+    Object.keys(B._del||{}).forEach(function(k){ out._del[k]=Math.max(out._del[k]||0,B._del[k]); });
+    out._mm={notes:{},focus:{},habitLog:{}};
+    IDLISTS.forEach(function(key){
+      var am={},bm={}; (A[key]||[]).forEach(function(x){ if(x&&x.id) am[x.id]=x; }); (B[key]||[]).forEach(function(x){ if(x&&x.id) bm[x.id]=x; });
+      var ids={}; Object.keys(am).forEach(function(i){ids[i]=1;}); Object.keys(bm).forEach(function(i){ids[i]=1;});
+      var res=[];
+      Object.keys(ids).forEach(function(id){
+        var a=am[id], b=bm[id], at=a?(a._m||0):0, bt=b?(b._m||0):0;
+        var del=out._del[id]||0, live=Math.max(at,bt);
+        if(del>live) return;            // deletion is the newest event -> stays deleted
+        if(del) delete out._del[id];     // an edit is newer than the tombstone -> resurrect
+        res.push(bt>at?b:a);
+      });
+      // keep a stable order: by ord if present, else original A order then B-only
+      if(res.length && ("ord" in res[0])) res.sort(function(x,y){ return (x.ord||0)-(y.ord||0); });
+      out[key]=res;
+    });
+    IDMAPS.forEach(function(key){
+      var am=A[key]||{}, bm=B[key]||{}, amt=(A._mm&&A._mm[key])||{}, bmt=(B._mm&&B._mm[key])||{};
+      var res={}, mm={}, keys={};
+      Object.keys(am).forEach(function(k){keys[k]=1;}); Object.keys(bm).forEach(function(k){keys[k]=1;});
+      Object.keys(keys).forEach(function(k){
+        var at=amt[k]||0, bt=bmt[k]||0, del=out._del[key+":"+k]||0, live=Math.max(at,bt);
+        if(del>live) return;
+        if(del) delete out._del[key+":"+k];
+        if(bt>at && (k in bm)){ res[k]=bm[k]; mm[k]=bt; } else { res[k]=(k in am)?am[k]:bm[k]; mm[k]=at||bt; }
+      });
+      out[key]=res; out._mm[key]=mm;
+    });
+    // dismissed is append-only -> union
+    var dis={}; (A.dismissed||[]).concat(B.dismissed||[]).forEach(function(x){ dis[x]=1; }); out.dismissed=Object.keys(dis);
+    return out;
+  }
+  // Lightweight signature to detect whether two states differ in substance (ignores savedAt).
+  function stateSig(d){ if(!d) return ""; var s=""; IDLISTS.forEach(function(key){ s+=key+":"+(d[key]||[]).map(function(x){return (x&&x.id)+"~"+(x&&x._m||0);}).sort().join(",")+"|"; }); IDMAPS.forEach(function(key){ var mm=(d._mm&&d._mm[key])||{}; s+=key+":"+Object.keys(d[key]||{}).map(function(k){return k+"~"+(mm[k]||0);}).sort().join(",")+"|"; }); s+="del:"+Object.keys(d._del||{}).sort().join(","); return s; }
   var S = load();
+  var baseState = clone(S);
   var bootSavedAt = S.savedAt||0;
   function normalize(d){ d.projects=d.projects||[]; d.tasks=d.tasks||[]; d.templates=d.templates||[]; d.habits=d.habits||[]; d.habitLog=d.habitLog||{}; d.events=d.events||[]; d.phases=d.phases||[]; d.dismissed=d.dismissed||[]; d.notes=d.notes||{}; d.calSources=d.calSources||[]; if(!d.proxy)d.proxy=PROXY_DEFAULT; d.emails=d.emails||[]; d.jobs=d.jobs||[]; d.improve=d.improve||[]; if(!d.calView)d.calView="month"; if(!d.calAnchor)d.calAnchor=(d.calMonth?d.calMonth+"-01":null); if(!d.skin)d.skin="paper"; delete d.apiKey; d.people=d.people||[]; d.collapsed=d.collapsed||{}; d.lastExport=d.lastExport||null; if(typeof d.name!=="string")d.name="";
     d.focus=d.focus||{}; Object.keys(d.focus).forEach(function(k){ var v=d.focus[k]; if(typeof v==="string"){ d.focus[k]=v?[{id:uid(),text:v,done:false}]:[]; } (d.focus[k]||[]).forEach(function(f){ if(!Array.isArray(f.subs)) f.subs=[]; }); });
@@ -625,6 +692,11 @@
     d.jobs.forEach(function(j){ if(j.notes) j.notes=sanitizeRTE(j.notes); });
     d.tasks.forEach(function(k){ if(k.notes) k.notes=sanitizeRTE(k.notes); });
     d.archive.forEach(function(k){ if(k.notes) k.notes=sanitizeRTE(k.notes); });
+    // ---- sync metadata (Phase 2: merge-by-item) ----
+    d._del=d._del||{};                                   // tombstones: id -> delete time
+    d._mm=d._mm||{}; d._mm.notes=d._mm.notes||{}; d._mm.focus=d._mm.focus||{}; d._mm.habitLog=d._mm.habitLog||{};
+    var _base=d.savedAt||Date.now();
+    IDLISTS.forEach(function(key){ (d[key]||[]).forEach(function(x){ if(x&&x.id&&!x._m) x._m=_base; }); }); // backfill legacy items
     return mergeSpuCoursePlan(d); }
   function load(){ try{ var d=JSON.parse(localStorage.getItem(KEY)); if(d&&d.version) return normalize(d); }catch(e){ try{ var raw=localStorage.getItem(KEY); if(raw) localStorage.setItem(KEY+"-corrupt",raw); }catch(e2){} } return seed(); }
   var SNAP_KEY="daybook-v1-snapshots";
@@ -643,7 +715,8 @@
       }
     }catch(e){}
   }
-  function save(){ S.savedAt=Date.now(); try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){ toast("Storage full — export a backup"); } keepLocalBackups(); scheduleSync(); scheduleGh(); updateSyncStatus(); }
+  function persist(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){ toast("Storage full — export a backup"); } keepLocalBackups(); updateSyncStatus(); }
+  function save(){ stampChanges(baseState,S); S.savedAt=Date.now(); baseState=clone(S); persist(); scheduleSync(); scheduleGh(); }
   function seed(){
     var prHome={id:uid(),name:"Home",emoji:"🏠"}, prWork={id:uid(),name:"Work",emoji:"💼"};
     return mergeSpuCoursePlan({
@@ -2374,67 +2447,60 @@
       body:body?JSON.stringify(body):undefined
     }).then(function(r){ if(!r.ok) throw new Error("GitHub replied "+r.status); return r.status===204?null:r.json(); });
   }
-  function scheduleGh(){ if(!GH||!GH.token||!GH.gistId) return; ghDirty=true; clearTimeout(ghTimer); ghTimer=setTimeout(ghPush,1500); }
-  function ghPush(){
+  function scheduleGh(){ if(!GH||!GH.token||!GH.gistId) return; ghDirty=true; clearTimeout(ghTimer); ghTimer=setTimeout(function(){ ghSync("auto"); },2500); }
+  // ghPull/ghPush are kept as thin aliases so existing callers keep working.
+  function ghPull(){ ghSync("pull"); }
+  function ghPush(){ ghSync("push"); }
+  // One reconciliation cycle: fetch cloud, merge item-by-item (newest edit wins, no whole-file clobber), push the union back.
+  var ghSyncing=false;
+  function ghSync(reason){
     if(!GH||!GH.token||!GH.gistId) return;
-    // SAFETY: an empty planner must never overwrite a cloud copy that has real data.
-    if(!substantive(S)){
-      ghFetchData(function(cloud){
-        if(substantive(cloud)){
-          if(!ghEmptyWarned){ ghEmptyWarned=true;
-            confirmModal("This device is empty — but your cloud has data","Your synced copy has "+cloud.tasks.length+" tasks and this device has none. Load your data instead of overwriting it with a blank planner?","Load my data",function(){ S=normalize(cloud); save(); applyTheme(); fillProjSelect(); render(); toast("Recovered from cloud"); });
-          }
-          return; // do NOT push the empty state over real data
-        }
-        doGhPush(); // cloud is also empty → safe
-      });
-      return;
-    }
-    ghEmptyWarned=false;
-    doGhPush();
+    if(ghSyncing){ ghDirty=true; return; }               // a cycle is mid-flight; it'll pick up the latest S
+    ghSyncing=true; ghBusy=true; updateSyncStatus();
+    ghFetchData(function(cloud,err){
+      var done=function(){ ghSyncing=false; ghBusy=false; updateSyncStatus(); };
+      if(err){ ghError=err; done(); return; }             // couldn't read the cloud — never overwrite blindly, retry later
+      ghError=null;
+      if(!cloud){ doGhPush(done); return; }               // no cloud file yet -> create it from this device
+      var merged=mergeStates(S,cloud);
+      var localChanged=stateSig(merged)!==stateSig(S);
+      var cloudChanged=stateSig(merged)!==stateSig(cloud);
+      S=normalize(merged); baseState=clone(S); persist();
+      if(localChanged){ applyTheme(); fillProjSelect(); render(); if(reason!=="auto") toast("Synced — merged changes from the cloud"); }
+      ghLastSync=Date.now();
+      if(cloudChanged){ doGhPush(done); } else { ghDirty=false; done(); }
+    });
   }
-  function doGhPush(){
-    ghBusy=true; updateSyncStatus();
+  function doGhPush(after){
     ghApi("PATCH","/gists/"+GH.gistId,{files:{"daybook.json":{content:JSON.stringify(S)}}})
       .then(function(){ ghLastSync=Date.now(); ghError=null; ghDirty=false; })
       .catch(function(e){ ghError=e.message; })
-      .then(function(){ ghBusy=false; updateSyncStatus(); });
+      .then(function(){ if(after) after(); else { ghBusy=false; updateSyncStatus(); } });
   }
   function ghFetchData(cb){
     ghApi("GET","/gists/"+GH.gistId).then(function(g){
       var f=g&&g.files&&g.files[GH_FILE];
-      if(!f){ cb(null); return; }
-      if(f.truncated){ fetch(f.raw_url).then(function(r){return r.text();}).then(function(t){ cb(parseGh(t)); }).catch(function(){ cb(null); }); }
+      if(!f){ cb(null); return; }                          // gist exists but no data file yet -> safe to create
+      if(f.truncated){ fetch(f.raw_url).then(function(r){return r.text();}).then(function(t){ cb(parseGh(t)); }).catch(function(){ cb(null,"Couldn't read cloud data"); }); }
       else cb(parseGh(f.content));
-    }).catch(function(e){ ghError=e.message; cb(null); });
+    }).catch(function(e){ cb(null,e.message); });           // network/API error -> signal so we don't clobber
   }
   function parseGh(t){ try{ var d=JSON.parse(t); return (d&&d.version)?d:null; }catch(e){ return null; } }
-  function ghPull(){
-    if(!GH||!GH.token||!GH.gistId) return;
-    ghFetchData(function(d){
-      if(!d) return;
-      ghLastSync=Date.now();
-      var cloudData=substantive(d), localData=substantive(S);
-      // load if the cloud is newer, OR if this device is empty but the cloud has data (recovery)
-      if(cloudData && (!localData || (d.savedAt&&d.savedAt>(S.savedAt||0)))){
-        confirmModal(localData?"Load newer data from the cloud?":"Recover your data from the cloud?",
-          localData?"Your GitHub sync copy was saved more recently than this device — likely from another browser or computer. Load it here?":"This device is empty, but your cloud copy has "+d.tasks.length+" tasks. Load your data?",
-          "Load it",function(){ S=normalize(d); save(); applyTheme(); fillProjSelect(); render(); toast("Loaded from cloud sync"); });
-      }
-    });
-  }
   function openGhModal(){
     var connected=GH&&GH.token&&GH.gistId;
     if(connected){
       modal('<h3>☁️ Cloud sync — connected</h3>'+
         '<p class="sub">Every change auto-saves to a secret gist on your GitHub account. Open Daybook in any browser, connect with the same token, and pick up where you left off.</p>'+
         '<div class="sub" style="font-size:12px;margin:10px 0">'+(ghError?"⚠ Last sync failed: "+esc(ghError):(ghLastSync?"Last synced "+new Date(ghLastSync).toLocaleTimeString():"Not synced yet this session"))+'</div>'+
+        '<p class="sub" style="font-size:12px">✓ Safe merge sync: edits on two devices are merged item-by-item — the newest edit of each task wins, so nothing gets clobbered.</p>'+
         '<div class="stack">'+
         '<button class="btn" id="gh-now">↻ Sync now</button>'+
+        '<button class="btn" id="gh-hist">🕓 Version history…</button>'+
         '<button class="btn ghost" id="gh-off" style="color:var(--terra-deep)">Disconnect (forget the token on this device)</button>'+
         '</div><div class="modal-actions"><button class="btn primary" data-x>Done</button></div>');
       document.querySelector("[data-x]").onclick=close;
-      document.getElementById("gh-now").onclick=function(){ toast("Syncing…"); ghPush(); ghPull(); };
+      document.getElementById("gh-now").onclick=function(){ toast("Syncing…"); ghSync("manual"); };
+      document.getElementById("gh-hist").onclick=openVersionsModal;
       document.getElementById("gh-off").onclick=function(){ GH=null; ghSaveCfg(); close(); toast("Cloud sync disconnected"); };
       return;
     }
@@ -2458,18 +2524,8 @@
       ghApi("GET","/gists?per_page=100").then(function(list){
         var g=(list||[]).find(function(x){ return x.description===GH_DESC || (x.files&&x.files[GH_FILE]); });
         if(g){
-          GH.gistId=g.id; ghSaveCfg(); close();
-          ghFetchData(function(d){
-            var cloudData=substantive(d), localData=substantive(S);
-            if(cloudData && (!localData || (d.savedAt&&d.savedAt>(S.savedAt||0)))){
-              // cloud has real data and this device is empty (or older) → offer to load, never auto-overwrite
-              confirmModal("Found your Daybook in the cloud",
-                localData?"It was saved more recently than this device. Load it here? (Cancel keeps this device\'s data and uploads it instead.)":"Your cloud has "+d.tasks.length+" tasks and this device is empty. Load your data?",
-                "Load cloud copy",function(){ S=normalize(d); save(); applyTheme(); fillProjSelect(); render(); toast("Loaded from cloud"); });
-              ghLastSync=Date.now();
-            } else if(localData){ ghPush(); toast("Connected — this device\'s data uploaded"); }
-            else { ghLastSync=Date.now(); toast("Connected — cloud sync is on"); }
-          });
+          // Found an existing Daybook gist -> merge (non-destructive: your data and the cloud's are unioned, no clobber).
+          GH.gistId=g.id; ghSaveCfg(); close(); toast("Connecting — merging your data…"); ghSync("connect");
         } else {
           ghApi("POST","/gists",{description:GH_DESC,public:false,files:{"daybook.json":{content:JSON.stringify(S)}}}).then(function(ng){
             GH.gistId=ng.id; ghSaveCfg(); ghLastSync=Date.now(); close(); toast("Connected — cloud sync is on");
@@ -2477,6 +2533,38 @@
         }
       }).catch(function(e){ GH=null; toast("Token didn\'t work — "+e.message); });
     };
+  }
+  // Version history: the sync gist keeps ~100 past revisions. List them and restore any one, all in-app.
+  function openVersionsModal(){
+    if(!GH||!GH.token||!GH.gistId){ toast("Connect cloud sync first"); return; }
+    modal('<h3>🕓 Version history</h3><p class="sub">Every cloud save is a restore point. Pick one to roll back to — it replaces this device\'s data, then re-syncs.</p><div id="ver-list" class="stack"><div class="empty" style="padding:20px">Loading history…</div></div><div class="modal-actions"><button class="btn ghost" data-x>Close</button></div>');
+    document.querySelector("[data-x]").onclick=close;
+    ghApi("GET","/gists/"+GH.gistId+"/commits?per_page=40").then(function(revs){
+      var box=document.getElementById("ver-list"); if(!box) return;
+      if(!revs||!revs.length){ box.innerHTML='<div class="empty" style="padding:20px">No saved revisions yet.</div>'; return; }
+      box.innerHTML=revs.map(function(r,i){
+        var when=r.committed_at?new Date(r.committed_at).toLocaleString():"unknown time";
+        var cs=r.change_status||{}, delta=(cs.additions!=null?("+"+cs.additions+" / −"+cs.deletions+" lines"):"");
+        return '<button class="btn" data-ver="'+esc(r.version)+'" style="text-align:left"><b>'+(i===0?"Current":when)+'</b>'+(i===0?'':'')+'<br><span class="sub" style="font-size:12px">'+(i===0?when:when)+(delta?' · '+delta:'')+'</span></button>';
+      }).join("");
+      box.querySelectorAll("[data-ver]").forEach(function(b){
+        b.onclick=function(){ var ver=b.dataset.ver;
+          toast("Loading that version…");
+          ghApi("GET","/gists/"+GH.gistId+"/"+ver).then(function(g){
+            var f=g&&g.files&&g.files[GH_FILE];
+            var apply=function(txt){ var d=parseGh(txt);
+              if(!d){ toast("That revision has no readable data"); return; }
+              confirmModal("Restore this version?","It has "+(d.tasks||[]).length+" task"+((d.tasks||[]).length===1?"":"s")+", saved "+(d.savedAt?new Date(d.savedAt).toLocaleString():"earlier")+". This replaces the current data on this device, then syncs the restore to the cloud.","Restore",function(){
+                S=normalize(d); baseState=clone(S); S.savedAt=Date.now(); persist(); applyTheme(); fillProjSelect(); render(); close(); toast("Restored — syncing…"); ghDirty=true; doGhPush();
+              });
+            };
+            if(!f){ toast("Couldn't read that revision"); return; }
+            if(f.truncated){ fetch(f.raw_url).then(function(r){return r.text();}).then(apply).catch(function(){ toast("Couldn't fetch that revision"); }); }
+            else apply(f.content);
+          }).catch(function(e){ toast("Couldn't load revision — "+e.message); });
+        };
+      });
+    }).catch(function(e){ var box=document.getElementById("ver-list"); if(box) box.innerHTML='<div class="empty" style="padding:20px">Couldn\'t load history — '+esc(e.message)+'</div>'; });
   }
 
   /* ---------- menu: backup / import / help ---------- */
