@@ -786,7 +786,7 @@
   var view="today";
   var viewDay=today();
   var pendingFocus=null;
-  var dragTaskId=null, dragJobId=null, dragNestTarget=null;
+  var dragTaskId=null, dragJobId=null, dragNestTarget=null, dragFocusId=null;
   var pendingSubAdd=null;
   var bulkMode=false, bulkIds={};
   var lastRenderedView=null;
@@ -795,6 +795,7 @@
   nav.onclick=function(e){ var b=e.target.closest("button"); if(!b)return; view=b.dataset.view;
     [].forEach.call(nav.children,function(c){c.setAttribute("aria-current",c===b?"true":"false");}); render(); };
   function render(){
+    ensureOrd();
     var m=document.getElementById("view");
     if(view==="today") m.innerHTML=viewToday();
     else if(view==="week") m.innerHTML=viewWeek();
@@ -897,6 +898,21 @@
   /* ---------- TODAY ---------- */
   function impFirst(arr){ return arr.slice().sort(function(a,b){ return (b.priority?1:0)-(a.priority?1:0); }); }
   function sortDay(arr){ return arr.slice().sort(function(a,b){ var p=(b.priority?1:0)-(a.priority?1:0); if(p) return p; var ta=a.at||"~", tb=b.at||"~"; return ta<tb?-1:(ta>tb?1:0); }); }
+  /* manual ordering: k.ord is the global order (set by dragging in the master Tasks list, reflected everywhere);
+     k.bord is a per-view local order used only inside a time block / Anytime (dragging there won't change the global order). */
+  function ensureOrd(){ var m=0; S.tasks.forEach(function(k){ if(typeof k.ord==="number"&&k.ord>m)m=k.ord; }); S.tasks.forEach(function(k){ if(typeof k.ord!=="number") k.ord=(++m); }); }
+  function ordVal(k, local){ if(local && typeof k.bord==="number") return k.bord; return typeof k.ord==="number"?k.ord:0; }
+  function orderTasks(arr, local){ return arr.slice().sort(function(a,b){ var p=(b.priority?1:0)-(a.priority?1:0); if(p) return p; return ordVal(a,local)-ordVal(b,local); }); }
+  function fracBetween(prev, next){ if(prev==null&&next==null) return 0; if(prev==null) return next-1; if(next==null) return prev+1; return (prev+next)/2; }
+  function reorderInList(k, ul, tgt, local){
+    var ids=[].map.call(ul.querySelectorAll(".task[data-id]"),function(li){return li.dataset.id;})
+      .filter(function(id){ return id!==k.id && S.tasks.some(function(x){return x.id===id;}); });
+    var idx = (tgt && tgt.dataset.id!==k.id) ? ids.indexOf(tgt.dataset.id) : ids.length;
+    if(idx<0) idx=ids.length;
+    function val(id){ var t=S.tasks.find(function(x){return x.id===id;}); return t?ordVal(t,local):0; }
+    var nv=fracBetween(idx>0?val(ids[idx-1]):null, idx<ids.length?val(ids[idx]):null);
+    if(local) k.bord=nv; else k.ord=nv;
+  }
   function fmtTime(at){ var h=+at.slice(0,2), m=at.slice(3); var h12=h%12||12; return h12+(m!=="00"?":"+m:"")+" "+(h<12?"am":"pm"); }
   function taskLi(k){
     var p=proj(k.projectId);
@@ -949,7 +965,7 @@
     }
     if(pendingSubAdd===f.id) subRows+='<li class="sub"><span class="inline-plus" style="width:15px;font-size:13px">⤷</span><input class="inline-add" data-fsubfor="'+f.id+'" placeholder="Add a subitem… (Esc to close)" aria-label="Add a subitem"/></li>';
     var subsHtml=subRows?'<ul class="subs">'+subRows+'</ul>':'';
-    return '<li class="task '+(f.done?"done":"")+'" data-id="'+f.id+'">'+
+    return '<li class="task '+(f.done?"done":"")+'" data-id="'+f.id+'" data-focus="1" draggable="true">'+
       '<button class="chk '+(f.done?"done":"")+'" data-act="focus-toggle" aria-label="Toggle done" aria-pressed="'+!!f.done+'"></button>'+
       '<div class="task-main" data-act="focus-edit" title="Tap to edit"><div class="task-title">'+esc(f.text)+'</div>'+
       (pills?'<div class="task-meta">'+pills+'</div>':"")+subsHtml+'</div>'+
@@ -1016,13 +1032,13 @@
 
     if(isToday) html+=captureCardHtml(true);
     var focusDone=focusItems.filter(function(f){return f.done;}).length;
-    html+=fold("focus",(isToday?"Today\'s focus":"Focus — "+niceDate(vd)),'<ul class="tasks">'+focusItems.map(focusRow).join("")+inlineAddRowFocus("What matters most "+(isToday?"today":"that day")+"…")+'</ul>',foldProg(focusDone,focusItems.length));
-    var master=sortDay(open);
+    html+=fold("focus",(isToday?"Today\'s focus":"Focus — "+niceDate(vd)),'<ul class="tasks" data-list="focus">'+focusItems.map(focusRow).join("")+inlineAddRowFocus("What matters most "+(isToday?"today":"that day")+"…")+'</ul>',foldProg(focusDone,focusItems.length));
+    var master=orderTasks(open,false);
     html+=fold("tasks","Tasks",'<ul class="tasks" data-list="master">'+master.map(taskLi).join("")+inlineAddRow("master","Add a task — try @project @morning, or “tomorrow”…")+'</ul>',foldProg(doneCount,total));
     // time blocks — side by side on wide screens
     html+='<div class="blocks-grid" style="margin-top:0">';
     blocks.forEach(function(b){
-      var items=sortDay(open.filter(function(k){return k.block===b;}));
+      var items=orderTasks(open.filter(function(k){return k.block===b;}),true);
       var doneB=doneV.filter(function(k){return k.block===b;}).length;
       var body='<ul class="tasks" data-list="'+b+'">'+items.map(taskLi).join("")+inlineAddRow(b,"Add to "+b+"…")+'</ul>';
       var action=foldProg(doneB,items.length+doneB)+'<button class="chip" style="padding:3px 9px" data-act="addblock" data-block="'+b+'">+ options</button>';
@@ -1030,10 +1046,10 @@
       html+=fold("block-"+b, BLOCK_ICONS[b]+" "+b.charAt(0).toUpperCase()+b.slice(1), body, action);
     });
     html+='</div>';
-    var anytime=sortDay(open.filter(function(k){return !k.block;}));
+    var anytime=orderTasks(open.filter(function(k){return !k.block;}),true);
     var doneA=doneV.filter(function(k){return !k.block;}).length;
     html+=fold("anytime","⏳ Anytime",'<ul class="tasks" data-list="loose">'+anytime.map(taskLi).join("")+inlineAddRow("loose","Add for anytime — no set time…")+'</ul>',foldProg(doneA,anytime.length+doneA));
-    var someday=S.tasks.filter(function(k){return !k.day && k.status!=="done" && inScope(k.projectId);});
+    var someday=orderTasks(S.tasks.filter(function(k){return !k.day && k.status!=="done" && inScope(k.projectId);}),false);
     var somedayDone=S.tasks.filter(function(k){return !k.day && k.status==="done" && inScope(k.projectId);}).length;
     html+=fold("someday","💭 Someday",'<ul class="tasks" data-list="someday">'+someday.map(taskLi).join("")+inlineAddRow("someday","Add for later — no date…")+'</ul>',foldProg(somedayDone,someday.length+somedayDone));
     var hb='';
@@ -1176,7 +1192,7 @@
     html+='<div class="stack">';
     for(var i=0;i<7;i++){
       var d=addDays(t,i);
-      var open=sortDay(S.tasks.filter(function(k){return k.day===d&&k.status!=="done"&&inScope(k.projectId);}));
+      var open=orderTasks(S.tasks.filter(function(k){return k.day===d&&k.status!=="done"&&inScope(k.projectId);}),false);
       var done=S.tasks.filter(function(k){return k.status==="done"&&k.completedOn===d&&inScope(k.projectId);}).length;
       var evs=S.events.filter(function(e){return e.date===d&&sourceEnabled(e)&&!(e.projectId&&!inScope(e.projectId));});
       html+='<div class="card"><div class="wk-day-head"><h3>'+(i===0?"Today":(i===1?"Tomorrow":WDFULL[dow(d)]))+'</h3><span class="sub">'+MONTHS[+d.slice(5,7)-1].slice(0,3)+' '+(+d.slice(8))+'</span>'+foldProg(done,open.length+done)+
@@ -1200,7 +1216,7 @@
       html+='<div class="proj-card"><div class="proj-top" style="background:'+p.color+'">'+
         '<h3>'+esc(p.name)+'</h3><div class="pmeta">'+open+' open · '+done+' done</div></div>'+
         '<div class="proj-body"><div class="prog"><span style="width:'+pct+'%;background:'+p.color+'"></span></div>';
-      var openTasks=ts.filter(function(k){return k.status==="todo";}).slice(0,6);
+      var openTasks=orderTasks(ts.filter(function(k){return k.status==="todo";}),false).slice(0,6);
       html+='<ul class="tasks">'+(openTasks.length?openTasks.map(function(k){
         return '<li class="task" data-id="'+k.id+'"><button class="chk" data-act="toggle" aria-label="done" aria-pressed="false"></button>'+
           '<div class="task-main" data-act="edit"><div class="task-title">'+esc(k.title)+'</div>'+
@@ -1409,11 +1425,13 @@
     v.ondragstart=function(e){
       var li=e.target.closest&&e.target.closest(".task[data-id]");
       var jc=e.target.closest&&e.target.closest(".job-card[data-id]");
+      if(li && li.dataset.focus){ dragFocusId=li.dataset.id; e.dataTransfer.effectAllowed="move"; try{ e.dataTransfer.setData("text/plain",li.dataset.id); }catch(err){} return; }
       if(li) dragTaskId=li.dataset.id; else if(jc) dragJobId=jc.dataset.id; else return;
       e.dataTransfer.effectAllowed="move"; try{ e.dataTransfer.setData("text/plain",(li||jc).dataset.id); }catch(err){}
       if(dragTaskId && S.tasks.some(function(x){return x.id===dragTaskId;})) showDragDock();
     };
     v.ondragover=function(e){
+      if(dragFocusId){ var ulf=e.target.closest('.tasks[data-list="focus"]'); if(ulf){ e.preventDefault(); e.dataTransfer.dropEffect="move"; clearDrag(); ulf.classList.add("drag-over"); } return; }
       if(dragTaskId){
         var li=e.target.closest(".task[data-id]");
         var ul=e.target.closest(".tasks[data-list]");
@@ -1426,23 +1444,30 @@
       else if(dragJobId){ var col=e.target.closest(".jobs-col[data-stage]"); if(col){ e.preventDefault(); e.dataTransfer.dropEffect="move"; clearDrag(); col.classList.add("drag-over"); } }
     };
     v.ondrop=function(e){
+      if(dragFocusId){ var ulf=e.target.closest('.tasks[data-list="focus"]'); if(ulf){ e.preventDefault();
+        var arr=S.focus[viewDay]||[]; var fi=arr.findIndex(function(x){return x.id===dragFocusId;});
+        if(fi>=0){ var item=arr.splice(fi,1)[0]; var ftgt=e.target.closest(".task[data-id]");
+          var fto=(ftgt&&ftgt.dataset.id!==dragFocusId)?arr.findIndex(function(x){return x.id===ftgt.dataset.id;}):-1;
+          arr.splice(fto<0?arr.length:fto,0,item); save(); render(); } }
+        dragFocusId=null; clearDrag(); return; }
       if(dragTaskId && dragNestTarget){ e.preventDefault(); var nid=dragTaskId, ntgt=dragNestTarget; dragTaskId=null; dragNestTarget=null; clearDrag(); hideDragDock(); nestTask(nid,ntgt); return; }
       if(dragTaskId){ var ul=e.target.closest(".tasks[data-list]"); if(ul){ e.preventDefault();
         var k=S.tasks.find(function(x){return x.id===dragTaskId;});
-        if(k){ if(ul.dataset.list==="someday"){ k.day=null; k.block=null; }
-          else if(ul.dataset.list.indexOf("day:")===0){ k.day=ul.dataset.list.slice(4); k.rollover=0; }
-          else if(ul.dataset.list==="master"){ if(!k.day) k.day=viewDay; }
-          else { k.block= ul.dataset.list==="loose"?null:ul.dataset.list; if(!k.day) k.day=viewDay; }
-          var tgt=e.target.closest(".task[data-id]");
-          S.tasks.splice(S.tasks.indexOf(k),1);
-          var to=(tgt&&tgt.dataset.id!==k.id)?S.tasks.findIndex(function(x){return x.id===tgt.dataset.id;}):-1;
-          S.tasks.splice(to<0?S.tasks.length:to,0,k); save(); render(); } } }
+        if(k){ var listName=ul.dataset.list;
+          if(listName==="someday"){ k.day=null; k.block=null; }
+          else if(listName.indexOf("day:")===0){ k.day=listName.slice(4); k.rollover=0; }
+          else if(listName==="master"){ if(!k.day) k.day=viewDay; }
+          else { k.block= listName==="loose"?null:listName; if(!k.day) k.day=viewDay; }
+          // master / someday / a specific day = the global order; time blocks & Anytime = a local order that won't disturb the master
+          var local = (listName!=="master" && listName!=="someday" && listName.indexOf("day:")!==0);
+          reorderInList(k, ul, e.target.closest(".task[data-id]"), local);
+          save(); render(); } } }
       else if(dragJobId){ var col=e.target.closest(".jobs-col[data-stage]"); if(col){ e.preventDefault();
         var j=S.jobs.find(function(x){return x.id===dragJobId;});
         if(j&&j.stage!==col.dataset.stage){ j.stage=col.dataset.stage; save(); render(); toast("Moved to "+col.dataset.stage); } } }
-      dragTaskId=null; dragJobId=null; dragNestTarget=null; clearDrag(); hideDragDock();
+      dragTaskId=null; dragJobId=null; dragNestTarget=null; dragFocusId=null; clearDrag(); hideDragDock();
     };
-    v.ondragend=function(){ dragTaskId=null; dragJobId=null; dragNestTarget=null; clearDrag(); hideDragDock(); };
+    v.ondragend=function(){ dragTaskId=null; dragJobId=null; dragNestTarget=null; dragFocusId=null; clearDrag(); hideDragDock(); };
     // generic clicks
     v.onclick=function(e){
       var a=e.target.closest("[data-act]"); if(!a)return; var act=a.dataset.act;
@@ -1684,12 +1709,15 @@
   document.getElementById("q-more").onclick=function(){ openTaskModal({title:qInput.value,projectId:qProj.value}); };
 
   /* ---------- modals ---------- */
-  var lastFocus=null;
+  var lastFocus=null, onModalDismiss=null;
+  /* dismissing a modal (click-away / Escape) runs its auto-save if one is set; the explicit Cancel button still discards */
+  function dismissModal(){ if(onModalDismiss){ var f=onModalDismiss; onModalDismiss=null; try{ f(); }catch(e){ close(); } } else close(); }
   function modal(inner){ var root=document.getElementById("modal-root");
     if(!root.children.length) lastFocus=document.activeElement;
+    onModalDismiss=null;
     root.innerHTML='<div class="scrim" id="scrim"><div class="modal" role="dialog" aria-modal="true">'+inner+'</div></div>';
     wireRTE(root);
-    document.getElementById("scrim").onclick=function(e){ if(e.target.id==="scrim") close(); };
+    document.getElementById("scrim").onclick=function(e){ if(e.target.id==="scrim") dismissModal(); };
     var m=root.querySelector(".modal");
     root.onkeydown=function(e){ if(e.key!=="Tab") return;
       var f=[].filter.call(m.querySelectorAll("button,input,select,textarea"),function(x){ return !x.disabled && (x.offsetWidth||x.offsetHeight); });
@@ -1699,7 +1727,7 @@
     setTimeout(function(){ var f=m.querySelector("input,select")||m.querySelector("button"); if(f) f.focus(); },0);
     return root;
   }
-  function close(){ var root=document.getElementById("modal-root"); root.innerHTML=""; root.onkeydown=null;
+  function close(){ onModalDismiss=null; var root=document.getElementById("modal-root"); root.innerHTML=""; root.onkeydown=null;
     if(lastFocus && document.contains(lastFocus)){ try{ lastFocus.focus(); }catch(e){} } lastFocus=null; }
   function confirmModal(title,msg,label,onYes){
     modal('<h3>'+title+'</h3><p class="sub" style="margin-top:8px">'+msg+'</p>'+
@@ -1811,8 +1839,8 @@
       document.getElementById("m-dup").onclick=function(){ var c={}; for(var kk in ed) c[kk]=ed[kk]; c.id=uid(); c.status="todo"; c.completedOn=null; c.created=today(); delete c.tplId; c.subs=(ed.subs||[]).map(function(s){return {id:uid(),text:s.text,done:false};}); S.tasks.push(c); save(); close(); render(); toast("Task duplicated"); };
       document.getElementById("m-focus").onclick=function(){ close(); startFocusTimer(ed.title,25); };
     }
-    modalActions(function(){
-      var title=document.getElementById("m-title").value.trim(); if(!title){toast("Add a title");return;}
+    function commitTask(dismiss){
+      var title=document.getElementById("m-title").value.trim(); if(!title){ if(dismiss){close();} else {toast("Add a title");} return; }
       var pid=document.getElementById("m-proj").value||null; if(pid==="__new") pid=null;
       var day=document.getElementById("m-day").value||null;
       var chosen=Object.keys(selBlocks).map(function(b){return b==="allday"?null:b;});
@@ -1825,7 +1853,7 @@
       if(pt.day) day=(pt.day==="someday")?null:pt.day;
       if(pt.block) chosen=[pt.block];
       if(pt.at&&(!tv||tv===(base.at||null))) tv=pt.at;
-      if(freq==="weekly"&&!weekdays.length){toast("Pick at least one weekday");return;}
+      if(freq==="weekly"&&!weekdays.length){ if(dismiss){freq="once";} else {toast("Pick at least one weekday");return;} }
       if(msn&&msn.value.trim()) subs.push({id:uid(),text:msn.value.trim(),done:false});
       var cleanSubs=subs.filter(function(s){return (s.text||"").trim();});
       var ntv=rteValue("m-notes")||null;
@@ -1838,8 +1866,11 @@
       if(freq==="once"){ chosen.forEach(function(bl){ S.tasks.push({id:uid(),title:title,projectId:pid,status:"todo",day:day,block:bl,at:tv,priority:priorityV,rollover:0,notes:ntv,subs:cleanSubs.map(function(s){return {id:uid(),text:s.text,done:s.done};}),created:today()}); }); }
       else { var tp={id:uid(),title:title,projectId:pid,block:chosen[0],freq:freq,start:day||today(),weekdays:weekdays,interval:+(document.getElementById("m-int")||{}).value||2,priority:priorityV};
         S.templates.push(tp); generateRecurring(today()); }
-      save(); close(); render(); toast(freq==="once"&&chosen.length>1?chosen.length+" tasks added":"Task added");
-    });
+      save(); close(); render(); if(!dismiss) toast(freq==="once"&&chosen.length>1?chosen.length+" tasks added":"Task added");
+    }
+    document.querySelector("[data-x]").onclick=close;
+    var msaveBtn=document.getElementById("m-save"); if(msaveBtn) msaveBtn.onclick=function(){ commitTask(false); };
+    onModalDismiss=function(){ commitTask(true); };
   }
   function modalActions(onSave){
     document.querySelector("[data-x]").onclick=close;
@@ -2951,7 +2982,7 @@
   document.getElementById("cap-btn").onclick=function(){ view="hub"; [].forEach.call(nav.children,function(c){c.setAttribute("aria-current",c.dataset.view==="hub"?"true":"false");}); render(); document.querySelector(".hub-cap")&&document.getElementById("cap-in")&&document.getElementById("cap-in").focus(); };
   var gSeq=0;
   document.addEventListener("keydown",function(e){
-    if(e.key==="Escape"){ var mr=document.getElementById("modal-root"); if(mr&&mr.children.length){ close(); } else if(bulkMode){ bulkMode=false; bulkIds={}; render(); } return; }
+    if(e.key==="Escape"){ var mr=document.getElementById("modal-root"); if(mr&&mr.children.length){ dismissModal(); } else if(bulkMode){ bulkMode=false; bulkIds={}; render(); } return; }
     if((e.metaKey||e.ctrlKey)&&(e.key==="k"||e.key==="K")){
       e.preventDefault();
       var mr2=document.getElementById("modal-root"); if(mr2.children.length) close();
