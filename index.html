@@ -395,6 +395,7 @@
   /* drag & drop */
   .tasks.drag-over{ outline:2px dashed var(--terra); outline-offset:3px; border-radius:8px; }
   .jobs-col.drag-over{ border-color: var(--terra); }
+  .task.touch-dragging, .job-card.touch-dragging, .today-unit.touch-dragging{ opacity:.55; outline:2px solid var(--terra); outline-offset:2px; border-radius:8px; }
 
   /* time-blocking Day view */
   .day-head{ display:flex; align-items:center; gap:10px; margin-bottom:12px; }
@@ -415,6 +416,24 @@
   .hourslot .task{ border-bottom:0; padding:5px 4px; }
   .now-line{ position:absolute; left:0; right:0; height:2px; background:var(--terra); z-index:3; pointer-events:none; }
   .now-line::before{ content:""; position:absolute; left:-4px; top:-3px; width:8px; height:8px; border-radius:50%; background:var(--terra); }
+
+  /* shared read-only snapshot page */
+  .snap-wrap{ max-width:680px; margin:0 auto; padding:20px 18px 60px; }
+  .snap-banner{ background:var(--terra-bg); color:var(--terra-deep); border:1px solid var(--terra); border-radius:10px; padding:9px 13px; font-size:13px; margin-bottom:20px; }
+  .snap-banner a{ color:var(--terra-deep); font-weight:700; }
+  .snap-h1{ font-size:24px; margin:0 0 18px; }
+  .snap-card{ background:var(--sheet); border:1px solid var(--line-soft); border-radius:14px; padding:14px 16px; margin-bottom:14px; }
+  .snap-card h2{ font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); margin:0 0 10px; }
+  .snap-list{ list-style:none; margin:0; padding:0; }
+  .snap-task{ padding:7px 0; border-top:1px solid var(--line-soft); font-size:15px; }
+  .snap-task:first-child{ border-top:0; }
+  .snap-task.done{ opacity:.5; text-decoration:line-through; }
+  .snap-meta{ font-size:12px; color:var(--ink-faint); margin-top:2px; }
+  .snap-subs{ list-style:none; margin:5px 0 0; padding:0 0 0 16px; }
+  .snap-sub{ font-size:13px; color:var(--ink-soft); padding:2px 0; }
+  .snap-sub.done{ opacity:.5; text-decoration:line-through; }
+  .snap-foot{ text-align:center; color:var(--ink-faint); font-size:12px; margin-top:24px; }
+  .snap-foot a, .snap-foot a:visited{ color:var(--terra-deep); font-weight:600; }
 
   /* today layout — centered column + side log panel */
   .today-flex{ display:flex; gap:18px; align-items:flex-start; }
@@ -615,6 +634,13 @@
     var ai=document.createElement("link"); ai.rel="apple-touch-icon"; ai.href=DB_ICON; document.head.appendChild(ai);
   })();
 
+  /* ---------- shared read-only snapshot mode (Phase 6): bail out of the normal app ---------- */
+  if(location.hash.indexOf("#snap=")===0){
+    var _snapJson=b64urlDecode(location.hash.slice(6));
+    var _snap=null; try{ _snap=JSON.parse(_snapJson); }catch(e){}
+    if(_snap){ renderSnapshotView(_snap); return; }
+  }
+
   /* ---------- storage ---------- */
   var KEY = "daybook-v1";
   var APP_BUILD = "2026-07-15";
@@ -744,7 +770,32 @@
     }catch(e){}
   }
   function persist(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){ toast("Storage full — export a backup"); } keepLocalBackups(); updateSyncStatus(); }
-  function save(){ stampChanges(baseState,S); S.savedAt=Date.now(); baseState=clone(S); persist(); scheduleSync(); scheduleGh(); }
+  // ---- global undo/redo (Phase 6). Snapshots the pre-mutation state; rapid bursts coalesce into one step. ----
+  var undoStack=[], redoStack=[], lastUndoPush=0, suppressUndo=false;
+  function save(){
+    stampChanges(baseState,S);
+    if(!suppressUndo){ var nowT=Date.now();
+      if(nowT-lastUndoPush>700){ undoStack.push(JSON.stringify(baseState)); if(undoStack.length>25) undoStack.shift(); redoStack.length=0; }
+      lastUndoPush=nowT;
+    }
+    S.savedAt=Date.now(); baseState=clone(S); persist(); scheduleSync(); scheduleGh();
+  }
+  function applyRestore(target){ // used by undo/redo: swap state, re-stamp so it syncs, refresh UI
+    suppressUndo=true; S=normalize(target); save(); suppressUndo=false;
+    applyTheme(); fillProjSelect(); render();
+  }
+  function undo(){
+    if(document.getElementById("modal-root").children.length) return;
+    if(!undoStack.length){ toast("Nothing to undo"); return; }
+    redoStack.push(JSON.stringify(S)); if(redoStack.length>25) redoStack.shift();
+    applyRestore(JSON.parse(undoStack.pop())); toast("Undone (⌘⇧Z to redo)");
+  }
+  function redo(){
+    if(document.getElementById("modal-root").children.length) return;
+    if(!redoStack.length){ toast("Nothing to redo"); return; }
+    undoStack.push(JSON.stringify(S)); if(undoStack.length>25) undoStack.shift();
+    applyRestore(JSON.parse(redoStack.pop())); toast("Redone");
+  }
   function seed(){
     var prHome={id:uid(),name:"Home",emoji:"🏠"}, prWork={id:uid(),name:"Work",emoji:"💼"};
     return mergeSpuCoursePlan({
@@ -1859,6 +1910,35 @@
       dragTaskId=null; dragJobId=null; dragNestTarget=null; dragFocusId=null; dragUnitKey=null; clearDrag(); hideDragDock();
     };
     v.ondragend=function(){ dragTaskId=null; dragJobId=null; dragNestTarget=null; dragFocusId=null; dragUnitKey=null; [].forEach.call(v.querySelectorAll(".unit-dragging"),function(x){x.classList.remove("unit-dragging");}); clearDrag(); hideDragDock(); };
+    // ---- touch-drag (Phase 6): long-press to pick up, drag to move. Reuses the mouse drag/drop handlers via synthesized events. ----
+    if(!v.__touchDragBound){ v.__touchDragBound=true; (function(){
+      var tEl=null, tDragging=false, tTimer=null, tStartY=0, tStartX=0, tLastX=0, tLastY=0;
+      function fakeEvt(el,cy){ return { target:el||document.body, clientY:cy, preventDefault:function(){}, dataTransfer:{ dropEffect:"", effectAllowed:"", setData:function(){} } }; }
+      function begin(){ if(!tEl) return; tDragging=true; tEl.classList.add("touch-dragging");
+        try{ v.ondragstart(fakeEvt(tEl,tStartY)); }catch(e){} navigator.vibrate&&navigator.vibrate(8); }
+      function endDrag(){ if(tTimer){ clearTimeout(tTimer); tTimer=null; }
+        if(tDragging){ var el=document.elementFromPoint(tLastX,tLastY); try{ v.ondrop(fakeEvt(el,tLastY)); }catch(e){} }
+        try{ v.ondragend(); }catch(e){}
+        if(tEl) tEl.classList.remove("touch-dragging");
+        tEl=null; tDragging=false;
+      }
+      v.addEventListener("touchstart",function(e){
+        if(e.touches.length!==1) return;
+        var el=e.target.closest&&e.target.closest(".task[data-id], .job-card[data-id], .today-unit[data-unit]");
+        if(!el || e.target.closest("input,textarea,select,[contenteditable=true],button,a")) return;
+        tEl=el; var t=e.touches[0]; tStartX=tLastX=t.clientX; tStartY=tLastY=t.clientY;
+        tTimer=setTimeout(begin,240); // long-press so normal taps/scroll still work
+      },{passive:true});
+      v.addEventListener("touchmove",function(e){
+        var t=e.touches[0]; if(!t) return; tLastX=t.clientX; tLastY=t.clientY;
+        if(!tDragging){ if(tTimer && (Math.abs(t.clientX-tStartX)>12||Math.abs(t.clientY-tStartY)>12)){ clearTimeout(tTimer); tTimer=null; tEl=null; } return; }
+        e.preventDefault(); // we own the gesture now — stop the page scrolling
+        var el=document.elementFromPoint(t.clientX,t.clientY);
+        try{ v.ondragover(fakeEvt(el,t.clientY)); }catch(err){}
+      },{passive:false});
+      v.addEventListener("touchend",endDrag);
+      v.addEventListener("touchcancel",endDrag);
+    })(); }
     // generic clicks
     v.onclick=function(e){
       var a=e.target.closest("[data-act]"); if(!a)return; var act=a.dataset.act;
@@ -2776,6 +2856,69 @@
     var a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="daybook-backup-"+today()+".json"; a.click();
     S.lastExport=today(); save(); toast("Backup downloaded");
   }
+  /* ---------- share a read-only snapshot (Phase 6) ---------- */
+  function b64urlEncode(str){ return btoa(unescape(encodeURIComponent(str))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
+  function b64urlDecode(str){ str=str.replace(/-/g,"+").replace(/_/g,"/"); while(str.length%4)str+="="; try{ return decodeURIComponent(escape(atob(str))); }catch(e){ return null; } }
+  function buildSnapshot(scope){
+    var t=today();
+    var days = scope==="week" ? (function(){ var a=[]; for(var i=0;i<7;i++)a.push(addDays(t,i)); return a; })() : [t];
+    var inRange=function(d){ return days.indexOf(d)>=0; };
+    var snap={ n:S.name||"", d:t, scope:scope, tasks:[], focus:[], events:[] };
+    orderTasks(S.tasks.filter(function(k){ return k.day && inRange(k.day) && inScope(k.projectId); }),false).forEach(function(k){
+      var p=k.projectId?proj(k.projectId):null;
+      snap.tasks.push({t:k.title, d:k.day, b:k.block||null, at:k.at||null, p:k.priority?1:0, done:k.status==="done"?1:0, s:(k.subs||[]).map(function(s){return {t:s.text,done:s.done?1:0};}), pr:p?p.name:null });
+    });
+    (S.focus[t]||[]).forEach(function(f){ var txt=f.taskId?(S.tasks.find(function(x){return x.id===f.taskId;})||{}).title:f.text; if(txt) snap.focus.push({t:txt, done:f.done?1:0}); });
+    S.events.filter(function(e){ return e.date && inRange(e.date); }).forEach(function(e){ snap.events.push({t:e.title, d:e.date}); });
+    return snap;
+  }
+  function openShareModal(){
+    var mkLink=function(scope){ var snap=buildSnapshot(scope); var enc=b64urlEncode(JSON.stringify(snap)); return {url:location.origin+location.pathname+"#snap="+enc, count:snap.tasks.length, size:enc.length}; };
+    var render=function(scope){
+      var r=mkLink(scope);
+      var warn = r.size>60000 ? '<div class="sub" style="color:var(--terra-deep);font-size:11px">That’s a large snapshot — some chat apps may trim the link. Try “Today” for a shorter one.</div>' : '';
+      return '<div class="fld"><label>Read-only link ('+r.count+' task'+(r.count===1?"":"s")+')</label><input id="snap-url" readonly value="'+esc(r.url)+'" style="font-size:12px"/></div>'+warn+
+        '<div class="stack"><button class="btn primary" id="snap-copy">📋 Copy link</button><a class="btn" id="snap-open" href="'+esc(r.url)+'" target="_blank">Preview ↗</a></div>';
+    };
+    modal('<h3>🔗 Share a snapshot</h3>'+
+      '<p class="sub">A read-only view of your plan that anyone can open — no account, nothing editable, and it doesn’t touch your live data. The plan is baked into the link itself.</p>'+
+      '<div class="chips" id="snap-scope"><button class="chip" data-s="day" aria-pressed="true">Today</button><button class="chip" data-s="week" aria-pressed="false">This week</button></div>'+
+      '<div id="snap-body" style="margin-top:12px">'+render("day")+'</div>'+
+      '<div class="modal-actions"><button class="btn primary" data-x>Done</button></div>');
+    document.querySelector("[data-x]").onclick=close;
+    var scope="day";
+    function wire(){
+      document.getElementById("snap-copy").onclick=function(){ var u=document.getElementById("snap-url").value; copyText(u,function(){toast("Snapshot link copied");}); };
+      var su=document.getElementById("snap-url"); su.onclick=function(){ su.select(); };
+    }
+    wire();
+    document.getElementById("snap-scope").onclick=function(e){ var b=e.target.closest(".chip"); if(!b)return; scope=b.dataset.s;
+      [].forEach.call(this.children,function(c){c.setAttribute("aria-pressed",c===b);});
+      document.getElementById("snap-body").innerHTML=render(scope); wire();
+    };
+  }
+  // Render a shared snapshot as a standalone read-only page (called from boot when the URL has #snap=).
+  function renderSnapshotView(snap){
+    var esc2=function(s){ return (s||"").replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];}); };
+    var BLK={morning:"☀️",afternoon:"🌤",evening:"🌙"};
+    var byDay={}; (snap.tasks||[]).forEach(function(k){ (byDay[k.d]=byDay[k.d]||[]).push(k); });
+    var dates=Object.keys(byDay).sort();
+    var niceD=function(s){ try{ var p=s.split("-"); var d=new Date(+p[0],+p[1]-1,+p[2]); return ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d.getDay()]+", "+["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getMonth()]+" "+d.getDate(); }catch(e){ return s; } };
+    var taskHtml=function(k){
+      var subs=(k.s||[]).map(function(s){ return '<li class="snap-sub'+(s.done?" done":"")+'">'+(s.done?"✓ ":"○ ")+esc2(s.t)+'</li>'; }).join("");
+      var meta=[]; if(k.at)meta.push("🕒 "+k.at); if(k.b&&BLK[k.b])meta.push(BLK[k.b]+" "+k.b); if(k.pr)meta.push(esc2(k.pr)); if(k.p)meta.push("★");
+      return '<li class="snap-task'+(k.done?" done":"")+'"><div>'+(k.done?"✓ ":"○ ")+esc2(k.t)+'</div>'+(meta.length?'<div class="snap-meta">'+meta.join(" · ")+'</div>':"")+(subs?'<ul class="snap-subs">'+subs+'</ul>':"")+'</li>';
+    };
+    var body='<div class="snap-wrap"><div class="snap-banner">🔗 Shared read-only snapshot'+(snap.n?" from "+esc2(snap.n):"")+' · <a href="'+esc2(location.pathname)+'">Open your own Daybook →</a></div>'+
+      '<h1 class="snap-h1">📔 '+(snap.scope==="week"?"This week":"Today")+(snap.d?' · '+niceD(snap.d):"")+'</h1>';
+    if((snap.focus||[]).length){ body+='<div class="snap-card"><h2>⭐ Focus</h2><ul class="snap-list">'+snap.focus.map(function(f){return '<li class="snap-task'+(f.done?" done":"")+'">'+(f.done?"✓ ":"○ ")+esc2(f.t)+'</li>';}).join("")+'</ul></div>'; }
+    if(!dates.length){ body+='<div class="snap-card"><p style="opacity:.6">No tasks in this snapshot.</p></div>'; }
+    dates.forEach(function(d){ body+='<div class="snap-card"><h2>'+niceD(d)+'</h2><ul class="snap-list">'+byDay[d].map(taskHtml).join("")+'</ul></div>'; });
+    if((snap.events||[]).length){ body+='<div class="snap-card"><h2>📅 Events</h2><ul class="snap-list">'+snap.events.map(function(e){return '<li class="snap-task">'+esc2(e.t)+' <span class="snap-meta">· '+niceD(e.d)+'</span></li>';}).join("")+'</ul></div>'; }
+    body+='<div class="snap-foot">Made with Daybook — a free, offline, single-file planner. <a href="'+esc2(location.pathname)+'">Try it →</a></div></div>';
+    document.body.innerHTML=body;
+    document.body.setAttribute("data-snapshot","1");
+  }
   function openRestoreModal(){
     var items=[];
     try{ var lg=localStorage.getItem(KEY+"-lastgood"); if(lg){ var dl=JSON.parse(lg); items.push({label:"Most recent good save", t:dl.savedAt, n:(dl.tasks||[]).length, raw:lg}); } }catch(e){}
@@ -2814,6 +2957,7 @@
       '<button class="btn" id="x-gh">☁️ '+(GH&&GH.gistId?"Cloud sync: connected":"Cloud sync via GitHub (cross-device)")+'</button>'+
       '<button class="btn" id="x-remind">🔔 Task-time reminders: '+(S.remind?"on":"off")+'</button>'+
       '<button class="btn" id="x-feed">📡 Reminder calendar feed (subscribe)</button>'+
+      '<button class="btn" id="x-share">🔗 Share a read-only snapshot</button>'+
       '<button class="btn" id="x-capture">⚡ Quick capture (bookmarklet / share)</button>'+
       '<button class="btn" id="x-lock">🔒 App lock: '+(lockCfg()?"on":"off")+'</button>'+
       '<button class="btn" id="x-archive">🗄 Archive done tasks older than 60 days'+(archN?' ('+archN+')':'')+'</button>'+
@@ -2828,6 +2972,7 @@
     document.getElementById("x-ics").onclick=exportICSFile;
     document.getElementById("x-restore").onclick=function(){ close(); openRestoreModal(); };
     document.getElementById("x-feed").onclick=function(){ close(); openFeedModal(); };
+    document.getElementById("x-share").onclick=function(){ close(); openShareModal(); };
     document.getElementById("x-capture").onclick=function(){ close(); openCaptureModal(); };
     document.getElementById("x-lock").onclick=function(){ close(); openLockModal(); };
     document.getElementById("x-remind").onclick=function(){
@@ -3319,7 +3464,7 @@
     build("");
   }
   function openShortcutsModal(){
-    var rows=[["⌘K / Ctrl+K","Command palette — every action in one box"],["/","Search everything"],["n","Jump to the quick-add box"],["g then t · w · h · p · e · c · l","Go to Today · Week · Hub · Projects · People · Calendar · Timeline"],["[","Show / hide the sidebar"],["]","Show / hide the log panel"],["?","This cheat sheet"],["Esc","Close any popup or leave select mode"],["@ in any add box","Tag a project, time of day, day, or clock time"]];
+    var rows=[["⌘K / Ctrl+K","Command palette — every action in one box"],["⌘Z / Ctrl+Z","Undo · add ⇧ to redo"],["/","Search everything"],["n","Jump to the quick-add box"],["g then t · w · h · p · e · c · l","Go to Today · Week · Hub · Projects · People · Calendar · Timeline"],["[","Show / hide the sidebar"],["]","Show / hide the log panel"],["?","This cheat sheet"],["Esc","Close any popup or leave select mode"],["@ in any add box","Tag a project, time of day, day, or clock time"]];
     modal('<h3>⌨️ Keyboard shortcuts</h3><div style="margin-top:12px">'+rows.map(function(r){
       return '<div class="log-item" style="display:flex;gap:12px;align-items:baseline"><b style="flex:0 0 200px">'+r[0]+'</b><span>'+r[1]+'</span></div>';
     }).join("")+'</div><div class="modal-actions"><button class="btn primary" data-x>Got it</button></div>');
@@ -3678,6 +3823,8 @@
     var tg=e.target, tag=tg.tagName;
     if(tag==="INPUT"||tag==="TEXTAREA"||tag==="SELECT"||tg.isContentEditable) return;
     if(document.getElementById("modal-root").children.length) return;
+    if((e.metaKey||e.ctrlKey)&&(e.key==="z"||e.key==="Z")){ e.preventDefault(); if(e.shiftKey) redo(); else undo(); return; }
+    if((e.metaKey||e.ctrlKey)&&(e.key==="y"||e.key==="Y")){ e.preventDefault(); redo(); return; }
     if(e.metaKey||e.ctrlKey||e.altKey) return;
     if(gSeq && Date.now()-gSeq<900){
       gSeq=0;
