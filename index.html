@@ -596,7 +596,23 @@
     d.archive.forEach(function(k){ if(k.notes) k.notes=sanitizeRTE(k.notes); });
     return mergeSpuCoursePlan(d); }
   function load(){ try{ var d=JSON.parse(localStorage.getItem(KEY)); if(d&&d.version) return normalize(d); }catch(e){ try{ var raw=localStorage.getItem(KEY); if(raw) localStorage.setItem(KEY+"-corrupt",raw); }catch(e2){} } return seed(); }
-  function save(){ S.savedAt=Date.now(); try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){ toast("Storage full — export a backup"); } scheduleSync(); scheduleGh(); updateSyncStatus(); }
+  var SNAP_KEY="daybook-v1-snapshots";
+  function substantive(d){ return !!(d && (d.tasks||[]).length>0); }
+  function keepLocalBackups(){
+    if(!substantive(S)) return; // never let an empty state become a "backup"
+    var raw; try{ raw=localStorage.getItem(KEY); }catch(e){ return; }
+    try{ localStorage.setItem(KEY+"-lastgood", raw); }catch(e){}
+    try{
+      var arr=JSON.parse(localStorage.getItem(SNAP_KEY)||"[]");
+      var last=arr[arr.length-1];
+      if(!last || Date.now()-last.t > 2*3600*1000){ // rolling snapshot, at most every 2h
+        arr.push({t:Date.now(), n:(S.tasks||[]).length, data:raw});
+        while(arr.length>8) arr.shift();
+        localStorage.setItem(SNAP_KEY, JSON.stringify(arr));
+      }
+    }catch(e){}
+  }
+  function save(){ S.savedAt=Date.now(); try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){ toast("Storage full — export a backup"); } keepLocalBackups(); scheduleSync(); scheduleGh(); updateSyncStatus(); }
   function seed(){
     var prHome={id:uid(),name:"Home",emoji:"🏠"}, prWork={id:uid(),name:"Work",emoji:"💼"};
     return mergeSpuCoursePlan({
@@ -688,6 +704,16 @@
   function projColor(id){ var p=proj(id); return p?p.color:"var(--ink-faint)"; }
   function esc(s){ return (s||"").replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];}); }
   function el(html){ var d=document.createElement("div"); d.innerHTML=html.trim(); return d.firstChild; }
+  /* file picker — input MUST be attached to the DOM or .click() silently fails in standalone/PWA windows (the Brave-app import bug) */
+  function pickFile(accept, cb){
+    var inp=document.createElement("input"); inp.type="file"; if(accept) inp.accept=accept;
+    inp.style.position="fixed"; inp.style.left="-9999px"; inp.style.opacity="0";
+    document.body.appendChild(inp);
+    function cleanup(){ try{ inp.remove(); }catch(e){} }
+    inp.onchange=function(){ var f=inp.files&&inp.files[0]; setTimeout(cleanup,0); if(f) cb(f); };
+    inp.oncancel=function(){ setTimeout(cleanup,0); };
+    inp.click();
+  }
 
   /* ---------- rich text notes (bold/italic/underline/lists) ---------- */
   var RTE_ALLOWED={B:1,STRONG:1,I:1,EM:1,U:1,UL:1,OL:1,LI:1,BR:1,P:1,DIV:1,SPAN:1};
@@ -1946,13 +1972,11 @@
 
   /* ---------- .ics import ---------- */
   function importICS(){
-    var inp=document.createElement("input"); inp.type="file"; inp.accept=".ics,text/calendar";
-    inp.onchange=function(){ var f=inp.files[0]; if(!f)return; var r=new FileReader();
+    pickFile(".ics,text/calendar", function(f){ var r=new FileReader();
       r.onload=function(){ var evs=expandEvents(parseEvents(r.result)); var n=0;
         evs.forEach(function(e){ if(!S.events.some(function(x){return x.uid&&x.uid===e.uid&&!x.sourceId;})){ S.events.push({id:uid(),uid:e.uid,title:e.title||"(event)",date:e.date,source:"ics"}); n++; } });
         save(); toast(n+" event"+(n===1?"":"s")+" imported"); render(); };
-      r.readAsText(f); };
-    inp.click();
+      r.readAsText(f); });
   }
   function parseEvents(text){
     var lines=text.replace(/\r\n[ \t]/g,"").split(/\r?\n/); var cur=null,out=[];
@@ -2141,7 +2165,7 @@
 
   /* ---------- optional cloud sync via a GitHub gist (free, no server) ---------- */
   var GH_KEY="daybook-gh", GH_FILE="daybook.json", GH_DESC="Daybook sync";
-  var GH=null, ghTimer=null, ghLastSync=null, ghError=null, ghBusy=false;
+  var GH=null, ghTimer=null, ghLastSync=null, ghError=null, ghBusy=false, ghDirty=false, ghEmptyWarned=false;
   try{ GH=JSON.parse(localStorage.getItem(GH_KEY))||null; }catch(e){ GH=null; }
   function ghSaveCfg(){ if(GH&&GH.token) localStorage.setItem(GH_KEY,JSON.stringify(GH)); else localStorage.removeItem(GH_KEY); }
   function ghApi(method,path,body){
@@ -2150,12 +2174,29 @@
       body:body?JSON.stringify(body):undefined
     }).then(function(r){ if(!r.ok) throw new Error("GitHub replied "+r.status); return r.status===204?null:r.json(); });
   }
-  function scheduleGh(){ if(!GH||!GH.token||!GH.gistId) return; clearTimeout(ghTimer); ghTimer=setTimeout(ghPush,1500); }
+  function scheduleGh(){ if(!GH||!GH.token||!GH.gistId) return; ghDirty=true; clearTimeout(ghTimer); ghTimer=setTimeout(ghPush,1500); }
   function ghPush(){
     if(!GH||!GH.token||!GH.gistId) return;
+    // SAFETY: an empty planner must never overwrite a cloud copy that has real data.
+    if(!substantive(S)){
+      ghFetchData(function(cloud){
+        if(substantive(cloud)){
+          if(!ghEmptyWarned){ ghEmptyWarned=true;
+            confirmModal("This device is empty — but your cloud has data","Your synced copy has "+cloud.tasks.length+" tasks and this device has none. Load your data instead of overwriting it with a blank planner?","Load my data",function(){ S=normalize(cloud); save(); applyTheme(); fillProjSelect(); render(); toast("Recovered from cloud"); });
+          }
+          return; // do NOT push the empty state over real data
+        }
+        doGhPush(); // cloud is also empty → safe
+      });
+      return;
+    }
+    ghEmptyWarned=false;
+    doGhPush();
+  }
+  function doGhPush(){
     ghBusy=true; updateSyncStatus();
     ghApi("PATCH","/gists/"+GH.gistId,{files:{"daybook.json":{content:JSON.stringify(S)}}})
-      .then(function(){ ghLastSync=Date.now(); ghError=null; })
+      .then(function(){ ghLastSync=Date.now(); ghError=null; ghDirty=false; })
       .catch(function(e){ ghError=e.message; })
       .then(function(){ ghBusy=false; updateSyncStatus(); });
   }
@@ -2173,8 +2214,12 @@
     ghFetchData(function(d){
       if(!d) return;
       ghLastSync=Date.now();
-      if(d.savedAt&&d.savedAt>(S.savedAt||0)){
-        confirmModal("Load newer data from the cloud?","Your GitHub sync copy was saved more recently than this device — likely from another browser or computer. Load it here?","Load it",function(){ S=normalize(d); save(); applyTheme(); fillProjSelect(); render(); toast("Loaded from cloud sync"); });
+      var cloudData=substantive(d), localData=substantive(S);
+      // load if the cloud is newer, OR if this device is empty but the cloud has data (recovery)
+      if(cloudData && (!localData || (d.savedAt&&d.savedAt>(S.savedAt||0)))){
+        confirmModal(localData?"Load newer data from the cloud?":"Recover your data from the cloud?",
+          localData?"Your GitHub sync copy was saved more recently than this device — likely from another browser or computer. Load it here?":"This device is empty, but your cloud copy has "+d.tasks.length+" tasks. Load your data?",
+          "Load it",function(){ S=normalize(d); save(); applyTheme(); fillProjSelect(); render(); toast("Loaded from cloud sync"); });
       }
     });
   }
@@ -2215,10 +2260,15 @@
         if(g){
           GH.gistId=g.id; ghSaveCfg(); close();
           ghFetchData(function(d){
-            if(d&&d.savedAt&&d.savedAt>(S.savedAt||0)){
-              confirmModal("Found your Daybook in the cloud","It was saved more recently than this device. Load it here? (Cancel keeps this device\'s data and uploads it instead.)","Load cloud copy",function(){ S=normalize(d); save(); applyTheme(); fillProjSelect(); render(); toast("Loaded from cloud"); });
+            var cloudData=substantive(d), localData=substantive(S);
+            if(cloudData && (!localData || (d.savedAt&&d.savedAt>(S.savedAt||0)))){
+              // cloud has real data and this device is empty (or older) → offer to load, never auto-overwrite
+              confirmModal("Found your Daybook in the cloud",
+                localData?"It was saved more recently than this device. Load it here? (Cancel keeps this device\'s data and uploads it instead.)":"Your cloud has "+d.tasks.length+" tasks and this device is empty. Load your data?",
+                "Load cloud copy",function(){ S=normalize(d); save(); applyTheme(); fillProjSelect(); render(); toast("Loaded from cloud"); });
               ghLastSync=Date.now();
-            } else { ghPush(); toast("Connected — this device\'s data uploaded"); }
+            } else if(localData){ ghPush(); toast("Connected — this device\'s data uploaded"); }
+            else { ghLastSync=Date.now(); toast("Connected — cloud sync is on"); }
           });
         } else {
           ghApi("POST","/gists",{description:GH_DESC,public:false,files:{"daybook.json":{content:JSON.stringify(S)}}}).then(function(ng){
@@ -2257,6 +2307,26 @@
     var a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="daybook-backup-"+today()+".json"; a.click();
     S.lastExport=today(); save(); toast("Backup downloaded");
   }
+  function openRestoreModal(){
+    var items=[];
+    try{ var lg=localStorage.getItem(KEY+"-lastgood"); if(lg){ var dl=JSON.parse(lg); items.push({label:"Most recent good save", t:dl.savedAt, n:(dl.tasks||[]).length, raw:lg}); } }catch(e){}
+    try{ JSON.parse(localStorage.getItem(SNAP_KEY)||"[]").slice().reverse().forEach(function(s){ items.push({label:"Snapshot", t:s.t, n:s.n, raw:s.data}); }); }catch(e){}
+    try{ var cr=localStorage.getItem(KEY+"-corrupt"); if(cr){ items.push({label:"Recovered (last readable)", t:null, n:"?", raw:cr}); } }catch(e){}
+    var body='<h3>🛟 Restore from a local backup</h3><p class="sub">Daybook keeps automatic on-device snapshots. Pick one to roll back to — it replaces the current data on this device (and re-syncs afterward).</p>';
+    if(!items.length){ body+='<div class="empty" style="padding:20px">No local backups yet — they build up as you use the app.</div>'; }
+    else { body+='<div class="stack">'+items.map(function(it,i){
+      return '<button class="btn" data-ri="'+i+'" style="text-align:left"><b>'+esc(it.label)+'</b><br><span class="sub" style="font-size:12px">'+it.n+' tasks · '+(it.t?new Date(it.t).toLocaleString():"unknown time")+'</span></button>';
+    }).join("")+'</div>'; }
+    body+='<div class="modal-actions"><button class="btn ghost" data-x>Close</button></div>';
+    modal(body);
+    document.querySelector("[data-x]").onclick=close;
+    document.getElementById("modal-root").querySelectorAll("[data-ri]").forEach(function(b){
+      b.onclick=function(){ var it=items[+b.dataset.ri];
+        confirmModal("Restore this backup?", it.n+" task"+(it.n===1?"":"s")+" from "+(it.t?new Date(it.t).toLocaleString():"an earlier save")+" will replace the current data on this device.","Restore",function(){
+          try{ var d=JSON.parse(it.raw); S=normalize(d); save(); applyTheme(); fillProjSelect(); render(); toast("Restored from local backup"); }catch(e){ toast("Couldn't read that backup"); }
+        }); };
+    });
+  }
   document.getElementById("menu-btn").onclick=function(){
     var SKINS=[["paper","Paper"],["ocean","Ocean"],["forest","Forest"],["plum","Blossom"],["ink","Ink"]];
     var archCut=addDays(today(),-60);
@@ -2266,10 +2336,11 @@
       '<div class="fld"><label>Color scheme</label><div class="chips" id="skin-row">'+SKINS.map(function(s){return '<button class="chip" data-s="'+s[0]+'" aria-pressed="'+((S.skin||"paper")===s[0])+'">'+s[1]+'</button>';}).join("")+'</div><div class="sub" style="font-size:11px;margin-top:6px">Combine with the ◐ light/dark toggle in the top bar.</div></div>'+
       '<div class="fld"><label>Your name (for the greeting)</label><input id="set-name" value="'+esc(S.name||"")+'" placeholder="e.g. Sam"/></div>'+
       '<div class="stack">'+
-      '<button class="btn" id="x-export">⤓ Export backup (.json)</button>'+
-      '<button class="btn" id="x-csv">⤓ Export tasks (.csv — for Excel/Sheets)</button>'+
-      '<button class="btn" id="x-ics">⤓ Export calendar (.ics)</button>'+
-      '<button class="btn" id="x-import">⤒ Import backup (.json)</button>'+
+      '<button class="btn" id="x-export">⤒ Export backup (.json)</button>'+
+      '<button class="btn" id="x-csv">⤒ Export tasks (.csv — for Excel/Sheets)</button>'+
+      '<button class="btn" id="x-ics">⤒ Export calendar (.ics)</button>'+
+      '<button class="btn" id="x-import">⤓ Import backup (.json)</button>'+
+      '<button class="btn" id="x-restore">🛟 Restore from a local backup</button>'+
       (window.showSaveFilePicker?'<button class="btn" id="x-sync">🔗 '+(syncName?"Sync file: "+esc(syncName):"Link a sync file (auto-save)")+'</button>'+(syncName?'<button class="btn ghost" id="x-unsync">Unlink sync file</button>':""):"")+
       '<button class="btn" id="x-gh">☁️ '+(GH&&GH.gistId?"Cloud sync: connected":"Cloud sync via GitHub (cross-device)")+'</button>'+
       '<button class="btn" id="x-remind">🔔 Task-time reminders: '+(S.remind?"on":"off")+'</button>'+
@@ -2283,6 +2354,7 @@
     document.getElementById("set-done").onclick=function(){ close(); render(); };
     document.getElementById("x-csv").onclick=exportCSV;
     document.getElementById("x-ics").onclick=exportICSFile;
+    document.getElementById("x-restore").onclick=function(){ close(); openRestoreModal(); };
     document.getElementById("x-remind").onclick=function(){
       if(!S.remind){
         if(typeof Notification==="undefined"){ toast("This browser can't show notifications"); return; }
@@ -2309,10 +2381,9 @@
     var xs=document.getElementById("x-sync"); if(xs) xs.onclick=linkSyncFile;
     var xu=document.getElementById("x-unsync"); if(xu) xu.onclick=function(){ syncHandle=null; syncName=null; idbSet("syncHandle",null); idbSet("syncName",null); close(); toast("Sync file unlinked"); };
     document.getElementById("x-import").onclick=function(){
-      var inp=document.createElement("input"); inp.type="file"; inp.accept=".json";
-      inp.onchange=function(){ var f=inp.files[0]; if(!f)return; var r=new FileReader();
+      pickFile(".json,application/json", function(f){ var r=new FileReader();
         r.onload=function(){ try{ var d=JSON.parse(r.result); if(d.version){ openImportModal(normalize(d)); } else toast("Not a Daybook file"); }catch(e){ toast("Couldn't read that file"); } };
-        r.readAsText(f); }; inp.click();
+        r.readAsText(f); });
     };
     document.getElementById("x-install").onclick=function(){
       close(); modal('<h3>Use it like an app</h3><p class="sub" style="margin-bottom:14px">No install needed — it runs in your browser and keeps working offline once loaded.</p>'+
@@ -2416,7 +2487,7 @@
     var html='<h2 class="view-h">Hub</h2><p class="sub">Capture things fast, track your job search, flag emails, and note what to improve — all in one place.</p><div class="stack">';
 
     // AI capture
-    html+=captureCardHtml(false);
+    html+=captureCardHtml(true);
 
     // insights
     html+=insightsHtml();
@@ -2588,9 +2659,9 @@
       ["⏱","Focus timer — 25 minutes",function(){ startFocusTimer("",25); }],
       ["☑","Select multiple tasks (bulk edit)",function(){ view="today"; syncNav(); bulkMode=true; bulkIds={}; render(); toast("Tap tasks to select them"); }],
       ["⌨️","Keyboard shortcuts",function(){ openShortcutsModal(); }],
-      ["⤓","Export backup (.json)",exportBackup],
-      ["⤓","Export tasks (.csv)",exportCSV],
-      ["⤓","Export calendar (.ics)",exportICSFile],
+      ["⤒","Export backup (.json)",exportBackup],
+      ["⤒","Export tasks (.csv)",exportCSV],
+      ["⤒","Export calendar (.ics)",exportICSFile],
       ["☁️","Cloud sync settings",function(){ openGhModal(); }],
       ["⚙️","Backup & settings",function(){ document.getElementById("menu-btn").onclick(); }]
     ].map(function(a){ return {icon:a[0],label:a[1],hint:"action",run:a[2]}; });
@@ -2908,6 +2979,8 @@
   function checkDay(){ if(S.lastOpen!==today()){ viewDay=today(); onOpen(); render(); } }
   document.addEventListener("visibilitychange",function(){ if(!document.hidden) checkDay(); });
   setInterval(checkDay,60000);
+  // heartbeat: keep a local snapshot and retry cloud sync if a push is still pending/failed
+  setInterval(function(){ keepLocalBackups(); if(GH&&GH.gistId&&(ghDirty||ghError)) ghPush(); }, 5*60000);
   if(navigator.storage&&navigator.storage.persist){ try{ navigator.storage.persist(); }catch(e){} }
   if("serviceWorker" in navigator && (location.protocol==="https:"||location.hostname==="localhost")){ try{ navigator.serviceWorker.register("sw.js").catch(function(){}); }catch(e){} }
   idbGet("syncName",function(n){ syncName=n; updateSyncStatus(); });
