@@ -452,6 +452,8 @@
   .panel-move{ display:flex; gap:4px; flex-wrap:wrap; margin-top:6px; }
   .panel-move button{ font-family:inherit; font-size:10.5px; font-weight:600; padding:2px 8px; border-radius:999px; border:1px solid var(--line); background:var(--card); color:var(--ink-soft); cursor:pointer; }
   .panel-move button:hover{ border-color:var(--terra); color:var(--terra-deep); }
+  .panel-move button.pm-primary{ background:var(--terra); border-color:var(--terra); color:#fff; }
+  .panel-move button.pm-primary:hover{ background:var(--terra-deep); color:#fff; }
   .log-day{ font-size:11px; font-weight:700; color:var(--terra-deep); text-transform:uppercase; letter-spacing:.08em; margin:10px 0 2px; cursor:pointer; }
   .log-day:hover{ text-decoration:underline; }
   .log-item{ font-size:13px; padding:4px 0 4px 4px; border-bottom:1px solid var(--line-soft); color:var(--ink-soft); }
@@ -647,6 +649,11 @@
   var PROXY_DEFAULT = "https://api.allorigins.win/raw?url=";
   var SPU_PROJECT_ID="spu-social-psych-2026";
   var SPU_PLAN_REVISION=2026071404;
+  // Stable ids for seeded starter entities so a fresh browser/device can't create id-different duplicates that the merge-sync then unions. (Root-cause fix for profile/project/habit duplication.)
+  var SEED_IDS={ profHome:"seed-prof-home", profWork:"seed-prof-work", projPersonal:"seed-proj-personal", projWork:"seed-proj-work", habitWater:"seed-habit-water", habitAir:"seed-habit-air", habitMove:"seed-habit-move" };
+  // Map a seeded entity's (type,name) to its stable id so the dedupe migration converges every device on the same survivor.
+  var SEED_CANON={ profile:{home:SEED_IDS.profHome, work:SEED_IDS.profWork}, project:{personal:SEED_IDS.projPersonal, work:SEED_IDS.projWork}, habit:{water:SEED_IDS.habitWater, "fresh air":SEED_IDS.habitAir, move:SEED_IDS.habitMove} };
+  var DEDUPE_REV=1;
   // ---- merge-by-item sync (Phase 2) ----
   var IDLISTS=["projects","tasks","templates","routines","habits","events","phases","people","emails","jobs","improve","calSources","profiles","archive"];
   var IDMAPS=["notes","focus","habitLog"]; // date-keyed maps merged per key
@@ -717,8 +724,57 @@
   // Lightweight signature to detect whether two states differ in substance (ignores savedAt).
   function stateSig(d){ if(!d) return ""; var s=""; IDLISTS.forEach(function(key){ s+=key+":"+(d[key]||[]).map(function(x){return (x&&x.id)+"~"+(x&&x._m||0);}).sort().join(",")+"|"; }); IDMAPS.forEach(function(key){ var mm=(d._mm&&d._mm[key])||{}; s+=key+":"+Object.keys(d[key]||{}).map(function(k){return k+"~"+(mm[k]||0);}).sort().join(",")+"|"; }); s+="del:"+Object.keys(d._del||{}).sort().join(","); return s; }
   var S = load();
+  var bootDedupeCount = dedupeRemovedCount;               // duplicates cleaned on this load (toast shown after first render)
   var baseState = clone(S);
   var bootSavedAt = S.savedAt||0;
+  // ---- de-duplicate seeded starter entities (profiles/projects/habits) merged from multiple devices ----
+  var dedupeRemovedCount=0;
+  function canonSeedId(type,name){ var m=SEED_CANON[type]; return m ? (m[String(name||"").trim().toLowerCase()]||null) : null; }
+  function dedupeByName(list,type){
+    var groups={}, order=[];
+    (list||[]).forEach(function(x){ if(!x||!x.id) return; var key=String(x.name||"").trim().toLowerCase(); if(!key) key="__blank__"+x.id; if(!groups[key]){ groups[key]=[]; order.push(key); } groups[key].push(x); });
+    var survivors=[], map={}, removed=[];
+    order.forEach(function(key){
+      var grp=groups[key]; var canon=canonSeedId(type,key);
+      var byId=grp.slice().sort(function(a,b){ return a.id<b.id?-1:(a.id>b.id?1:0); }); // deterministic across devices
+      var survivor = (canon && byId.filter(function(x){return x.id===canon;})[0]) || byId[0];
+      if(grp.length>1){ grp.forEach(function(x){ if(x===survivor) return; // fold content into the survivor (favor survivor, fill blanks, keep the "richer" values)
+        if(!survivor.notes && x.notes) survivor.notes=x.notes;
+        if(!survivor.emoji && x.emoji) survivor.emoji=x.emoji;
+        if(x.fav) survivor.fav=true;
+        if(type==="habit" && (x.goal||0)>(survivor.goal||0)) survivor.goal=x.goal;
+      }); }
+      var targetId = canon || survivor.id;
+      grp.forEach(function(x){ if(x.id!==targetId){ map[x.id]=targetId; if(x!==survivor) removed.push(x.id); } });
+      if(survivor.id!==targetId){ map[survivor.id]=targetId; survivor.id=targetId; }
+      if(grp.length>1 || survivor.id!==(byId[0]&&byId[0].id)) survivor._m=Date.now(); // touch only when something actually changed
+      survivors.push(survivor);
+    });
+    return {survivors:survivors, map:map, removed:removed};
+  }
+  function dedupeSeededEntities(d){
+    var pr=dedupeByName(d.profiles,"profile"), pj=dedupeByName(d.projects,"project"), hb=dedupeByName(d.habits,"habit");
+    d.profiles=pr.survivors; d.projects=pj.survivors; d.habits=hb.survivors;
+    var remap=function(id,map){ return (id!=null && map[id]) ? map[id] : id; };
+    d.projects.forEach(function(p){ if(p.profileId) p.profileId=remap(p.profileId,pr.map); });
+    if(d.activeProfile && d.activeProfile!=="all" && d.activeProfile!=="fav") d.activeProfile=remap(d.activeProfile,pr.map);
+    var fixProj=function(o){ if(o&&o.projectId) o.projectId=remap(o.projectId,pj.map); };
+    (d.tasks||[]).forEach(fixProj); (d.archive||[]).forEach(fixProj); (d.events||[]).forEach(fixProj);
+    (d.phases||[]).forEach(fixProj); (d.templates||[]).forEach(fixProj);
+    Object.keys(d.focus||{}).forEach(function(day){ (d.focus[day]||[]).forEach(fixProj); });
+    if(Array.isArray(d.filterProjects)){ var seen={}, nf=[]; d.filterProjects.forEach(function(id){ var r=remap(id,pj.map); if(r&&!seen[r]){ seen[r]=1; nf.push(r); } }); d.filterProjects=nf; }
+    // habitLog is date -> {habitId:count}; rewrite inner keys, max-merge collisions, and bump _mm so the rewrite syncs
+    d._mm=d._mm||{}; d._mm.habitLog=d._mm.habitLog||{};
+    Object.keys(d.habitLog||{}).forEach(function(day){ var dl=d.habitLog[day]; if(!dl||typeof dl!=="object") return;
+      var changed=false, nl={};
+      Object.keys(dl).forEach(function(hid){ var r=remap(hid,hb.map); if(r!==hid) changed=true; nl[r]=(r in nl)?Math.max(nl[r],dl[hid]):dl[hid]; });
+      if(changed){ d.habitLog[day]=nl; d._mm.habitLog[day]=Date.now(); }
+    });
+    var removed=pr.removed.concat(pj.removed).concat(hb.removed);
+    if(removed.length){ var ts=Date.now(); d._del=d._del||{}; removed.forEach(function(id){ d._del[id]=ts; }); } // tombstone losers so deletions sync & can't resurrect
+    dedupeRemovedCount=removed.length;
+    return d;
+  }
   function normalize(d){ d.projects=d.projects||[]; d.tasks=d.tasks||[]; d.templates=d.templates||[]; d.habits=d.habits||[]; d.habitLog=d.habitLog||{}; d.events=d.events||[]; d.phases=d.phases||[]; d.dismissed=d.dismissed||[]; d.notes=d.notes||{}; d.calSources=d.calSources||[]; if(!d.proxy)d.proxy=PROXY_DEFAULT; d.emails=d.emails||[]; d.jobs=d.jobs||[]; d.improve=d.improve||[]; if(!d.calView)d.calView="month"; if(!d.calAnchor)d.calAnchor=(d.calMonth?d.calMonth+"-01":null); if(!d.skin)d.skin="paper"; delete d.apiKey; d.people=d.people||[]; d.collapsed=d.collapsed||{}; d.lastExport=d.lastExport||null; if(typeof d.name!=="string")d.name="";
     d.focus=d.focus||{}; Object.keys(d.focus).forEach(function(k){ var v=d.focus[k]; if(typeof v==="string"){ d.focus[k]=v?[{id:uid(),text:v,done:false}]:[]; } (d.focus[k]||[]).forEach(function(f){ if(!Array.isArray(f.subs)) f.subs=[]; }); });
     if(!d.tlView)d.tlView="months"; if(typeof d.panelOpen!=="boolean")d.panelOpen=true;
@@ -751,6 +807,7 @@
     d._mm=d._mm||{}; d._mm.notes=d._mm.notes||{}; d._mm.focus=d._mm.focus||{}; d._mm.habitLog=d._mm.habitLog||{};
     var _base=d.savedAt||Date.now();
     IDLISTS.forEach(function(key){ (d[key]||[]).forEach(function(x){ if(x&&x.id&&!x._m) x._m=_base; }); }); // backfill legacy items
+    dedupeSeededEntities(d);                              // collapse device-duplicated starter profiles/projects/habits
     return mergeSpuCoursePlan(d); }
   function load(){ try{ var d=JSON.parse(localStorage.getItem(KEY)); if(d&&d.version) return normalize(d); }catch(e){ try{ var raw=localStorage.getItem(KEY); if(raw) localStorage.setItem(KEY+"-corrupt",raw); }catch(e2){} } return seed(); }
   var SNAP_KEY="daybook-v1-snapshots";
@@ -797,17 +854,17 @@
     applyRestore(JSON.parse(redoStack.pop())); toast("Redone");
   }
   function seed(){
-    var prHome={id:uid(),name:"Home",emoji:"🏠"}, prWork={id:uid(),name:"Work",emoji:"💼"};
+    var prHome={id:SEED_IDS.profHome,name:"Home",emoji:"🏠"}, prWork={id:SEED_IDS.profWork,name:"Work",emoji:"💼"};
     return mergeSpuCoursePlan({
-      version:1, lastOpen:null, theme:null,
+      version:1, lastOpen:null, theme:null, dedupeRev:DEDUPE_REV,
       profiles:[prHome,prWork], activeProfile:"all", filterProjects:[], sbOpen:true,
       remind:false, welcomed:false, archive:[], notesRTE:true,
       projects:[
-        {id:uid(),name:"Personal",color:"var(--p0)",notes:"",profileId:prHome.id,fav:false},
-        {id:uid(),name:"Work",color:"var(--p1)",notes:"",profileId:prWork.id,fav:false}
+        {id:SEED_IDS.projPersonal,name:"Personal",color:"var(--p0)",notes:"",profileId:prHome.id,fav:false},
+        {id:SEED_IDS.projWork,name:"Work",color:"var(--p1)",notes:"",profileId:prWork.id,fav:false}
       ],
       tasks:[], templates:[], routines:[], focus:{}, notes:{}, habits:[
-        {id:uid(),name:"Water",goal:8},{id:uid(),name:"Fresh air",goal:1},{id:uid(),name:"Move",goal:1}
+        {id:SEED_IDS.habitWater,name:"Water",goal:8},{id:SEED_IDS.habitAir,name:"Fresh air",goal:1},{id:SEED_IDS.habitMove,name:"Move",goal:1}
       ],
       habitLog:{}, events:[], phases:[], dismissed:[], calMonth:null,
       calSources:[], proxy:PROXY_DEFAULT,
@@ -1364,11 +1421,12 @@
     var MOVES=[["morning","☀️ Morning"],["afternoon","🌤 Afternoon"],["evening","🌙 Evening"],["anytime","⏳ Anytime"],["someday","💭 Someday"]];
     var blAdd='<ul class="tasks" data-list="someday" style="padding:0;margin:0 0 4px"><li class="task inline-row" style="padding:6px 4px"><span class="inline-plus">+</span><input class="inline-add" data-block="someday" placeholder="Add to backlog…" aria-label="Add to backlog"/></li></ul>';
     var blBody=blAdd+(backlog.length?backlog.map(backlogSideRow).join(""):'<div class="empty">Backlog is empty</div>');
+    var vdLabel = vd===today() ? "today" : niceDate(vd);
     var cb=carried.length?carried.map(function(k){
       var p=proj(k.projectId);
       return '<div class="panel-task" data-id="'+k.id+'"><div class="task-main" data-act="edit" title="Tap to edit"><div class="task-title" style="font-size:13.5px">'+esc(k.title)+'</div>'+
         '<div class="task-meta"><span class="pill aged">carried '+k.rollover+'d</span>'+(p?'<span class="pill proj" style="background:'+p.color+'">'+esc(p.name)+'</span>':"")+'</div></div>'+
-        '<div class="panel-move">'+MOVES.map(function(m){return '<button data-act="panel-move" data-to="'+m[0]+'" data-id="'+k.id+'">'+m[1]+'</button>';}).join("")+'</div></div>';
+        '<div class="panel-move"><button class="pm-primary" data-act="sched" data-id="'+k.id+'" data-d="'+vd+'">➕ Add to '+esc(vdLabel)+'</button>'+MOVES.map(function(m){return '<button data-act="panel-move" data-to="'+m[0]+'" data-id="'+k.id+'">'+m[1]+'</button>';}).join("")+'</div></div>';
     }).join(""):'<div class="empty">Nothing carried over 🎉</div>';
     var db=doneV.length?'<ul class="tasks">'+doneV.map(taskLi).join("")+'</ul>':'<div class="empty">Nothing completed '+(vd===today()?"yet":"this day")+'</div>';
     var byDay={};
@@ -1469,7 +1527,7 @@
   /* ---------- BACKLOG — undated tasks you schedule when ready (Structured-style) ---------- */
   function backlogRow(k){
     var p=proj(k.projectId);
-    var pills=(k.priority?'<span class="pill imp">★</span>':"")+(p?'<span class="pill proj" style="background:'+p.color+'">'+esc(p.name)+'</span>':"")+
+    var pills=(k.priority?'<span class="pill imp">★</span>':"")+((k.rollover||0)>=1?'<span class="pill aged">carried '+k.rollover+'d</span>':"")+(p?'<span class="pill proj" style="background:'+p.color+'">'+esc(p.name)+'</span>':"")+
       (k.subs&&k.subs.length?'<span class="pill subs-n">☑ '+k.subs.filter(function(s){return s.done;}).length+'/'+k.subs.length+'</span>':"");
     var chips='<button data-act="sched" data-id="'+k.id+'" data-d="'+today()+'">📅 Today</button>'+
       '<button data-act="sched" data-id="'+k.id+'" data-d="'+addDays(today(),1)+'">→ Tomorrow</button>';
@@ -1484,8 +1542,13 @@
   }
   function viewBacklog(){
     var undated=orderTasks(S.tasks.filter(function(k){return !k.day && k.status!=="done" && inScope(k.projectId);}),false);
+    var carried=orderTasks(S.tasks.filter(function(k){return k.status==="todo" && (k.rollover||0)>=1 && inScope(k.projectId);}),false);
     var html='<h2 class="view-h">Backlog</h2><p class="sub">Things to do <b>someday</b> — no set date. Add them here, then schedule each one for a day when you\'re ready.'+(scopeActive()?' <b>Filtered:</b> '+esc(scopeLabel())+' — <button class="chip" data-act="clearscope" style="padding:2px 9px">show all</button>':'')+'</p>';
     html+='<div class="card" style="margin-bottom:16px"><ul class="tasks" data-list="someday" style="padding:0"><li class="task inline-row"><span class="inline-plus">+</span><input class="inline-add" data-block="someday" placeholder="Add something to do someday — @project works too…" aria-label="Add backlog task"/></li></ul></div>';
+    if(carried.length){
+      html+='<div class="block-head"><p class="label">⏳ Carried over — unfinished, pull into any day</p><span class="cnt">'+carried.length+'</span></div>';
+      html+='<div class="card" style="margin-bottom:18px">'+carried.map(backlogRow).join("")+'</div>';
+    }
     if(!undated.length){ html+='<div class="card empty" style="padding:34px">Your backlog is empty. Anything without a deadline lands here.</div>'; return html; }
     // group by project for scannability
     var byProj={}; undated.forEach(function(k){ var key=k.projectId||"__none"; (byProj[key]=byProj[key]||[]).push(k); });
@@ -3867,6 +3930,7 @@
   ghPull();
   document.addEventListener("visibilitychange",function(){ if(!document.hidden) ghPull(); });
   if(lockCfg()) showLock();
+  if(bootDedupeCount>0){ save(); setTimeout(function(){ toast("Cleaned up "+bootDedupeCount+" duplicate item"+(bootDedupeCount===1?"":"s")+" (⌘Z to undo)"); },600); } // persist + push the de-duplicated data
   if(S.welcomed===false){ S.welcomed=true; save(); openWelcomeModal(); }
 })();
 </script>
